@@ -225,3 +225,84 @@ class TestRetryLogic:
         with pytest.raises(ValueError, match="bad request"):
             asyncio.run(agent.prompt_dict({"text": "test"}))
         assert agent.call_count == 1
+
+
+from unittest.mock import AsyncMock, MagicMock, patch
+
+
+class TestAnthropicAgent:
+    def _make_agent(self, output_type=None, reasoning_effort=0):
+        from llm import AnthropicAgent, CLAUDE_SONNET_MODEL
+        return AnthropicAgent(
+            model=CLAUDE_SONNET_MODEL,
+            system_prompt="You are helpful.",
+            user_prompt="Process: {text}",
+            output_type=output_type,
+            reasoning_effort=reasoning_effort,
+        )
+
+    def test_instantiation(self):
+        agent = self._make_agent()
+        assert agent.model.vendor.value == "anthropic"
+
+    @patch("llm.anthropic.AsyncAnthropic")
+    def test_call_llm_text_response(self, mock_cls):
+        from llm import AnthropicAgent
+        agent = self._make_agent()
+
+        # Mock the response
+        mock_text_block = MagicMock()
+        mock_text_block.type = "text"
+        mock_text_block.text = "hello world"
+        mock_response = MagicMock()
+        mock_response.content = [mock_text_block]
+
+        mock_client = AsyncMock()
+        mock_client.messages.create = AsyncMock(return_value=mock_response)
+        agent._client = mock_client
+
+        result = asyncio.run(agent.prompt_dict({"text": "test"}))
+        assert result == "hello world"
+        mock_client.messages.create.assert_called_once()
+
+    @patch("llm.anthropic.AsyncAnthropic")
+    def test_call_llm_structured_output(self, mock_cls):
+        from pydantic import BaseModel
+
+        class Output(BaseModel):
+            answer: str
+
+        agent = self._make_agent(output_type=Output)
+
+        mock_tool_block = MagicMock()
+        mock_tool_block.type = "tool_use"
+        mock_tool_block.input = {"answer": "42"}
+        mock_response = MagicMock()
+        mock_response.content = [mock_tool_block]
+
+        mock_client = AsyncMock()
+        mock_client.messages.create = AsyncMock(return_value=mock_response)
+        agent._client = mock_client
+
+        result = asyncio.run(agent.prompt_dict({"text": "test"}))
+        assert isinstance(result, Output)
+        assert result.answer == "42"
+
+    @patch("llm.anthropic.AsyncAnthropic")
+    def test_reasoning_effort_adds_thinking(self, mock_cls):
+        agent = self._make_agent(reasoning_effort=6)
+
+        mock_text_block = MagicMock()
+        mock_text_block.type = "text"
+        mock_text_block.text = "result"
+        mock_response = MagicMock()
+        mock_response.content = [mock_text_block]
+
+        mock_client = AsyncMock()
+        mock_client.messages.create = AsyncMock(return_value=mock_response)
+        agent._client = mock_client
+
+        asyncio.run(agent.prompt_dict({"text": "test"}))
+        call_kwargs = mock_client.messages.create.call_args[1]
+        assert "thinking" in call_kwargs
+        assert call_kwargs["thinking"]["budget_tokens"] == 4000

@@ -173,7 +173,10 @@ class LLMAgent(ABC):
 
         if self.output_type:
             return await self._parse_structured(raw, self.output_type)
-        return raw
+        # For text responses, subclass provides _extract_text; fallback to str
+        if hasattr(self, '_extract_text'):
+            return self._extract_text(raw)
+        return str(raw)
 
     async def _call_with_retry(self, system: str, user: str, output_schema: Optional[Dict[str, Any]]) -> Any:
         """Call LLM with tenacity retry on temporary exceptions."""
@@ -189,3 +192,68 @@ class LLMAgent(ABC):
             return await self._call_llm(system, user, output_schema)
 
         return await _do_call()
+
+
+import anthropic
+
+
+class AnthropicAgent(LLMAgent):
+    """Anthropic Claude agent using tool_use for structured output."""
+
+    _fatal_exceptions = (
+        anthropic.AuthenticationError,
+        anthropic.BadRequestError,
+    )
+    _temporary_exceptions = (
+        anthropic.RateLimitError,
+        anthropic.APIConnectionError,
+        anthropic.InternalServerError,
+    )
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._client = anthropic.AsyncAnthropic()
+
+    async def _call_llm(self, system, user, output_schema):
+        kwargs = {
+            "model": self.model.model_id,
+            "max_tokens": self.model.default_max_tokens,
+            "system": system,
+            "messages": [{"role": "user", "content": user}],
+        }
+
+        # Reasoning effort → thinking budget
+        thinking_tokens = _anthropic_thinking_tokens(self.reasoning_effort)
+        if thinking_tokens > 0:
+            kwargs["thinking"] = {"type": "enabled", "budget_tokens": thinking_tokens}
+            # Anthropic requires temperature=1 when thinking is enabled
+        else:
+            kwargs["temperature"] = self.temperature
+
+        # Structured output via tool_use
+        if output_schema:
+            kwargs["tools"] = [{
+                "name": "structured_output",
+                "description": "Return structured data",
+                "input_schema": output_schema,
+            }]
+            kwargs["tool_choice"] = {"type": "tool", "name": "structured_output"}
+
+        return await self._client.messages.create(**kwargs)
+
+    async def _parse_structured(self, raw, output_type):
+        for block in raw.content:
+            if block.type == "tool_use":
+                return output_type.model_validate(block.input)
+        raise ValueError("No tool_use block in Anthropic response")
+
+    async def _parse_logprobs(self, raw, target_tokens):
+        # Anthropic doesn't support native logprobs; confidence is in structured output
+        return {}
+
+    def _extract_text(self, raw) -> str:
+        """Extract text from Anthropic response, skipping thinking blocks."""
+        for block in raw.content:
+            if block.type == "text":
+                return block.text
+        return ""
