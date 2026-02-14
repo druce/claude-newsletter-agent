@@ -267,3 +267,83 @@ class TestNewsletterAgentState:
         sources = s.get_unique_sources()
         assert sources["TechCrunch"] == 2
         assert sources["Ars Technica"] == 1
+
+
+DB_PATH = "test_state_integration.db"
+
+
+@pytest.fixture(autouse=True)
+def clean_integration_db():
+    if os.path.exists(DB_PATH):
+        os.remove(DB_PATH)
+    yield
+    if os.path.exists(DB_PATH):
+        os.remove(DB_PATH)
+
+
+class TestStateDBIntegration:
+    def test_save_and_load_checkpoint(self):
+        from state import NewsletterAgentState
+        from db import AgentState as AgentStateDB
+        AgentStateDB.create_table(DB_PATH)
+
+        s = NewsletterAgentState(session_id="int_test", db_path=DB_PATH)
+        s.add_headlines([{"url": "http://a.com", "title": "A", "source": "s"}])
+        s.start_step("gather_urls")
+        s.complete_step("gather_urls", "Got 1")
+        s.save_checkpoint("gather_urls")
+
+        loaded = NewsletterAgentState.load_latest_from_db("int_test", DB_PATH)
+        assert loaded is not None
+        assert loaded.session_id == "int_test"
+        assert len(loaded.headline_data) == 1
+        assert loaded.get_step("gather_urls").status_message == "Got 1"
+
+    def test_save_multiple_checkpoints(self):
+        from state import NewsletterAgentState
+        from db import AgentState as AgentStateDB
+        AgentStateDB.create_table(DB_PATH)
+
+        s = NewsletterAgentState(session_id="multi", db_path=DB_PATH)
+        s.start_step("gather_urls")
+        s.complete_step("gather_urls")
+        s.save_checkpoint("gather_urls")
+
+        s.start_step("filter_urls")
+        s.complete_step("filter_urls")
+        s.save_checkpoint("filter_urls")
+
+        loaded = NewsletterAgentState.load_latest_from_db("multi", DB_PATH)
+        assert loaded.is_step_complete("gather_urls")
+        assert loaded.is_step_complete("filter_urls")
+
+    def test_load_specific_step(self):
+        from state import NewsletterAgentState, StepStatus
+        from db import AgentState as AgentStateDB
+        AgentStateDB.create_table(DB_PATH)
+
+        s = NewsletterAgentState(session_id="specific", db_path=DB_PATH)
+        s.start_step("gather_urls")
+        s.complete_step("gather_urls", "step 1 done")
+        s.save_checkpoint("gather_urls")
+
+        s.start_step("filter_urls")
+        s.complete_step("filter_urls", "step 2 done")
+        s.save_checkpoint("filter_urls")
+
+        loaded = NewsletterAgentState.load_from_db("specific", "gather_urls", DB_PATH)
+        assert loaded is not None
+        assert loaded.get_step("gather_urls").status_message == "step 1 done"
+        assert loaded.get_step("filter_urls").status != StepStatus.COMPLETE
+
+    def test_list_session_steps(self):
+        from state import NewsletterAgentState
+        from db import AgentState as AgentStateDB
+        AgentStateDB.create_table(DB_PATH)
+
+        s = NewsletterAgentState(session_id="list_test", db_path=DB_PATH)
+        s.save_checkpoint("gather_urls")
+        s.save_checkpoint("filter_urls")
+
+        steps = NewsletterAgentState.list_session_steps("list_test", DB_PATH)
+        assert len(steps) == 2
