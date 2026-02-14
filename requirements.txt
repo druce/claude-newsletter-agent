@@ -1,0 +1,35 @@
+# Core
+python-dotenv
+pydantic>=2.0
+
+# LLM
+anthropic
+openai
+tenacity
+
+# Data processing
+numpy
+pandas
+scipy
+hdbscan
+umap-learn
+choix
+
+# Web scraping
+playwright>=1.43.0
+playwright-stealth
+aiohttp
+aiofiles
+feedparser
+trafilatura
+
+# Utilities
+tldextract
+pyyaml
+
+# Testing
+pytest
+pytest-asyncio
+pytest-mock
+pytest-cov
+pytest-timeout
