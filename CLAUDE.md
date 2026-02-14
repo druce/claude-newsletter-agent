@@ -7,7 +7,7 @@ Clean rewrite of the newsletter agent (from OpenAIAgentsSDK) using Claude models
 **Phase 1: Foundation — COMPLETE** (config, state, db)
 **Phase 2: LLM Layer — COMPLETE** (llm.py with multi-vendor support)
 **Phase 3: Library modules — COMPLETE** (scrape, fetch, dedupe, rating, cluster)
-- Phase 4: Bash-based steps (steps/) — not started
+**Phase 4: Bash-based steps — COMPLETE** (gather_urls, filter_urls, download_articles, rate_articles, cluster_topics)
 - Phase 5: MCP tools (tools/) — not started
 - Phase 6: Agent orchestrator — not started
 
@@ -28,6 +28,7 @@ lib/fetch.py   — Source processor (RSS/HTML/API from sources.yaml)
 lib/dedupe.py  — Embedding-based duplicate detection (cosine similarity)
 lib/rating.py  — Composite rating formula + Bradley-Terry battles
 lib/cluster.py — HDBSCAN + Optuna + UMAP + Claude cluster naming
+steps/         — CLI step scripts (gather_urls, filter_urls, download_articles, rate_articles, cluster_topics)
 CC.md          — Full migration plan with all phases
 ```
 
