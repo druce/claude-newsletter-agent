@@ -214,3 +214,44 @@ class TestGatherUrls:
         result = asyncio.run(gather_urls_action(state))
 
         assert len(state.headline_data) == 1
+
+
+class TestFilterUrls:
+    @pytest.fixture(autouse=True)
+    def setup_tables(self):
+        from db import Url, AgentState
+        AgentState.create_table(TEST_DB)
+        Url.create_table(TEST_DB)
+        yield
+
+    def test_filters_skiplist_domains(self):
+        from steps.filter_urls import _filter_skiplist
+
+        headlines = [
+            {"url": "https://example.com/good", "title": "Good Article"},
+            {"url": "https://finbold.com/bad", "title": "Bad Domain"},
+            {"url": "https://www.cnn.com/news", "title": "Ignored Domain"},
+        ]
+        filtered = _filter_skiplist(headlines)
+        assert len(filtered) == 1
+        assert filtered[0]["url"] == "https://example.com/good"
+
+    @patch("steps.filter_urls.create_agent")
+    def test_classifies_ai_relevance(self, mock_create):
+        from steps.filter_urls import filter_urls_action
+        from state import NewsletterAgentState
+
+        mock_agent = AsyncMock()
+        mock_agent.filter_dataframe.return_value = pd.Series([True, False], index=[0, 1])
+        mock_create.return_value = mock_agent
+
+        state = NewsletterAgentState(session_id="test_session", db_path=TEST_DB)
+        state.headline_data = [
+            {"url": "https://example.com/ai", "title": "AI Research Breakthrough"},
+            {"url": "https://example.com/sports", "title": "Sports Final Scores"},
+        ]
+
+        result = asyncio.run(filter_urls_action(state))
+        # Only AI-relevant article should remain
+        assert len(state.headline_data) == 1
+        assert "ai" in state.headline_data[0]["url"]
