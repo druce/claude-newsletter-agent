@@ -23,7 +23,7 @@ state.py       — StepStatus, WorkflowStep, WorkflowState, NewsletterAgentState
 db.py          — SQLiteModel base class + 5 models: Url, Article, Site, Newsletter, AgentState
 llm.py         — Multi-vendor LLM wrapper (Anthropic, OpenAI, Gemini) with structured output, batch processing, retry logic
 prompts.py     — All 23 LLM prompt templates (system/user/model/reasoning_effort)
-lib/scrape.py  — Camoufox browser automation, rate limiting, text extraction
+lib/scrape.py  — Playwright browser automation, rate limiting, text extraction
 lib/fetch.py   — Source processor (RSS/HTML/API from sources.yaml)
 lib/dedupe.py  — Embedding-based duplicate detection (cosine similarity)
 lib/rating.py  — Composite rating formula + Bradley-Terry battles

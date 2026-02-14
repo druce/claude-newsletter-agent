@@ -350,6 +350,7 @@ class Fetcher:
                 browser = await get_browser(FIREFOX_PROFILE_PATH)
 
                 # Scrape the landing page with source-specific parameters
+                # save_text=False: landing page text is just nav/link text, not useful
                 scrape_result = await scrape_url(
                     url=url,
                     title=filename,
@@ -359,6 +360,7 @@ class Fetcher:
                     scrolls=source.get("scroll", 0),
                     scroll_div=source.get("scroll_div", ""),
                     initial_sleep=source.get("initial_sleep", SLEEP_TIME),
+                    save_text=False,
                 )
 
                 if scrape_result.status not in ("success", "no_content"):

@@ -18,7 +18,7 @@ choix
 
 # Web scraping
 playwright>=1.43.0
-camoufox
+playwright-stealth
 aiohttp
 aiofiles
 feedparser

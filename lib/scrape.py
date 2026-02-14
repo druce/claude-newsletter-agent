@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 import re
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -15,7 +16,8 @@ from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
 import tldextract
 import trafilatura
 from bs4 import BeautifulSoup
-from camoufox.async_api import AsyncCamoufox
+from playwright.async_api import BrowserContext, async_playwright
+from playwright_stealth import Stealth
 
 from config import (
     DEFAULT_CONCURRENCY,
@@ -23,6 +25,7 @@ from config import (
     DOMAIN_RATE_LIMIT,
     PAGES_DIR,
     SHORT_REQUEST_TIMEOUT,
+    SLEEP_TIME,
     TEXT_DIR,
 )
 
@@ -79,6 +82,31 @@ def clean_url(url: str) -> str:
         "",  # no fragment
     ))
     return cleaned
+
+
+def is_valid_html(content: str, min_length: int = 1000) -> bool:
+    """Check whether *content* looks like legitimate HTML rather than binary/compressed data.
+
+    Returns ``False`` when any of these conditions hold:
+
+    * Content shorter than *min_length* bytes.
+    * No ``<!doctype`` or ``<html`` marker in the first 500 characters.
+    * More than 30 % non-ASCII characters in the first 10 000 characters
+      (corrupt/binary payloads typically exceed 70 %).
+    """
+    if len(content) < min_length:
+        return False
+
+    head = content[:500].lower()
+    if "<!doctype" not in head and "<html" not in head:
+        return False
+
+    sample = content[:10_000]
+    non_ascii = sum(1 for ch in sample if ord(ch) > 127)
+    if non_ascii / len(sample) > 0.30:
+        return False
+
+    return True
 
 
 def normalize_html(html_path: str) -> str:
@@ -188,6 +216,7 @@ class RateLimiter:
 # ---------------------------------------------------------------------------
 
 _browser_cache: Dict[str, Any] = {}
+_playwright_instance: Any = None
 _browser_lock = asyncio.Lock()
 
 
@@ -207,12 +236,72 @@ _BOT_BLOCK_PATTERNS = re.compile(
 )
 
 
-async def get_browser(user_data_dir: str) -> Any:
-    """Get or create a cached Camoufox browser context.
+async def _create_browser_context(p: Any, user_data_dir: str) -> BrowserContext:
+    """Create a new Playwright Firefox persistent context with stealth settings."""
+    viewport = random.choice([
+        {"width": 1920, "height": 1080},
+        {"width": 1366, "height": 768},
+        {"width": 1440, "height": 900},
+        {"width": 1536, "height": 864},
+        {"width": 1280, "height": 720},
+    ])
+    device_scale_factor = random.choice([1, 1.25, 1.5, 1.75, 2])
+    color_scheme = random.choice(["light", "dark", "no-preference"])
+    timezone_id = random.choice([
+        "America/New_York", "Europe/London", "Europe/Paris",
+        "Asia/Tokyo", "Australia/Sydney", "America/Los_Angeles",
+    ])
+    locale = random.choice(["en-US", "en-GB"])
+    extra_http_headers = {
+        "Accept-Language": f"{locale.split('-')[0]},{locale};q=0.9",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "DNT": "1" if random.choice([True, False]) else "0",
+    }
 
-    Uses ``AsyncCamoufox`` with ``persistent_context=True`` so cookies and
-    local-storage survive across runs.  The context is cached at module level
-    so only one browser is launched per ``user_data_dir``.
+    context = await p.firefox.launch_persistent_context(
+        user_data_dir=user_data_dir,
+        headless=True,
+        viewport=viewport,
+        device_scale_factor=device_scale_factor,
+        timezone_id=timezone_id,
+        color_scheme=color_scheme,
+        extra_http_headers=extra_http_headers,
+        ignore_default_args=["--enable-automation"],
+        args=["--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage"],
+        firefox_user_prefs={
+            "browser.link.open_newwindow": 3,
+            "browser.link.open_newwindow.restriction": 0,
+            "browser.tabs.loadInBackground": False,
+        },
+        user_agent=(
+            "Mozilla/5.0 (Macintosh; ARM Mac OS X 14.4; rv:125.0) "
+            "Gecko/20100101 Firefox/125.0"
+        ),
+        accept_downloads=True,
+    )
+
+    # Apply playwright-stealth to the context
+    stealth = Stealth()
+    page = await context.new_page()
+    await stealth.apply_stealth_async(page)
+    await page.close()
+
+    return context
+
+
+async def get_browser(user_data_dir: str) -> BrowserContext:
+    """Get or create a cached Playwright Firefox browser context.
+
+    Uses ``firefox.launch_persistent_context`` so cookies and local-storage
+    survive across runs.  The context is cached at module level so only one
+    browser is launched per ``user_data_dir``.
 
     Parameters
     ----------
@@ -222,9 +311,9 @@ async def get_browser(user_data_dir: str) -> Any:
     Returns
     -------
     BrowserContext
-        A Playwright-compatible browser context backed by Camoufox.
+        A Playwright browser context with stealth settings applied.
     """
-    global _browser_lock
+    global _browser_lock, _playwright_instance
 
     # Fast path: already cached
     if user_data_dir in _browser_cache:
@@ -235,14 +324,28 @@ async def get_browser(user_data_dir: str) -> Any:
         if user_data_dir in _browser_cache:
             return _browser_cache[user_data_dir]
 
-        cm = AsyncCamoufox(
-            persistent_context=True,
-            user_data_dir=user_data_dir,
-            headless=True,
-        )
-        context = await cm.__aenter__()
+        if _playwright_instance is None:
+            _playwright_instance = await async_playwright().start()
+
+        context = await _create_browser_context(_playwright_instance, user_data_dir)
         _browser_cache[user_data_dir] = context
         return context
+
+
+async def enable_fast_mode(page: Any) -> None:
+    """Block heavy resources (images, media, fonts) to speed up page loads."""
+    blocked_types = {"image", "media", "font"}
+
+    async def _route_handler(route: Any) -> None:
+        try:
+            if route.request.resource_type in blocked_types:
+                await route.abort()
+            else:
+                await route.continue_()
+        except Exception:
+            pass
+
+    await page.route("**/*", _route_handler)
 
 
 # ---------------------------------------------------------------------------
@@ -255,6 +358,11 @@ async def scrape_url(
     browser_context: Any,
     html_dir: str = PAGES_DIR,
     text_dir: str = TEXT_DIR,
+    click_xpath: str = "",
+    scrolls: int = 0,
+    scroll_div: str = "",
+    initial_sleep: float = SLEEP_TIME,
+    save_text: bool = True,
 ) -> ScrapeResult:
     """Scrape a single URL and save HTML + extracted text to disk.
 
@@ -270,19 +378,53 @@ async def scrape_url(
         Directory for raw HTML files.
     text_dir:
         Directory for extracted plain-text files.
+    click_xpath:
+        Optional XPath to click before capturing content.
+    scrolls:
+        Number of times to scroll to bottom (for infinite-scroll pages).
+    scroll_div:
+        CSS selector for a scrollable container (scrolls window if empty).
+    initial_sleep:
+        Seconds to wait after page load before interacting.
+    save_text:
+        Whether to extract and save a plain-text version alongside HTML.
+        Set to ``False`` for landing-page scrapes where text isn't useful.
 
     Returns
     -------
     ScrapeResult
         Contains paths, final URL, and a status string
-        (``"success"``, ``"no_content"``, ``"blocked"``, or ``"error"``).
+        (``"success"``, ``"no_content"``, ``"blocked"``, ``"corrupt"``, or ``"error"``).
     """
     page = None
     try:
         page = await browser_context.new_page()
 
+        # Block heavy resources for faster page loads
+        await enable_fast_mode(page)
+
         # Navigate
         await page.goto(url, timeout=SHORT_REQUEST_TIMEOUT * 1000, wait_until="domcontentloaded")
+
+        # Wait after load, then perform optional interactions
+        sleep_time = initial_sleep + random.uniform(1, 3)
+        await asyncio.sleep(sleep_time)
+
+        if click_xpath:
+            await asyncio.sleep(initial_sleep + random.uniform(1, 3))
+            await page.wait_for_selector(f"xpath={click_xpath}")
+            await page.click(f"xpath={click_xpath}")
+
+        for _ in range(scrolls):
+            await asyncio.sleep(random.uniform(1, 3))
+            if scroll_div:
+                await page.evaluate("""
+                    const el = document.querySelector('%s');
+                    if (el) { el.scrollTop = el.scrollHeight; }
+                    else { window.scrollTo(0, document.body.scrollHeight); }
+                """ % scroll_div)
+            else:
+                await page.evaluate("window.scrollTo(0, document.body.scrollHeight);")
 
         # Get page content
         html_source = await page.content()
@@ -300,32 +442,40 @@ async def scrape_url(
                 status="blocked",
             )
 
+        # Reject binary/compressed content before writing to disk
+        if not is_valid_html(html_source):
+            logger.warning("Corrupt/binary content from %s (len=%d)", url, len(html_source))
+            return ScrapeResult(final_url=final_url, status="corrupt")
+
         # Ensure output directories exist
         os.makedirs(html_dir, exist_ok=True)
-        os.makedirs(text_dir, exist_ok=True)
 
         safe_name = sanitize_filename(title)
         html_path = os.path.join(html_dir, f"{safe_name}.html")
-        text_path = os.path.join(text_dir, f"{safe_name}.txt")
 
         # Save raw HTML
         with open(html_path, "w", encoding="utf-8") as f:
             f.write(html_source)
 
-        # Extract text via normalize_html (reads the file we just wrote)
-        text = normalize_html(html_path)
-
-        # Save extracted text
-        with open(text_path, "w", encoding="utf-8") as f:
-            f.write(text)
-
         # Try to extract last_updated from meta tags or JSON-LD
         last_updated = _extract_last_updated(html_source)
 
-        if not text.strip():
-            status = "no_content"
-        else:
-            status = "success"
+        text_path = ""
+        status = "success"
+
+        if save_text:
+            os.makedirs(text_dir, exist_ok=True)
+            text_path = os.path.join(text_dir, f"{safe_name}.txt")
+
+            # Extract text via normalize_html (reads the file we just wrote)
+            text = normalize_html(html_path)
+
+            # Save extracted text
+            with open(text_path, "w", encoding="utf-8") as f:
+                f.write(text)
+
+            if not text.strip():
+                status = "no_content"
 
         return ScrapeResult(
             html_path=html_path,

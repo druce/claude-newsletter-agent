@@ -7,7 +7,7 @@ class TestSessionId:
         from agent import build_session_id
 
         result = build_session_id(session=None)
-        expected = f"newsletter_{datetime.now():%Y%m%d}"
+        expected = f"newsletter_{datetime.now():%Y%m%d_%H%M%S}"
         assert result == expected
 
     def test_explicit_session_id(self):

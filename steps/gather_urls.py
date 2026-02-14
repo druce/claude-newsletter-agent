@@ -33,15 +33,18 @@ async def gather_urls_action(state: NewsletterAgentState) -> str:
     total_urls = 0
     total_sources = 0
     failed_sources = 0
+    source_counts: dict[str, int] = {}
 
     for source_result in results:
         source_name = source_result["source"]
         if source_result["status"] != "success":
             failed_sources += 1
+            source_counts[source_name] = -1  # mark as failed
             logger.warning("Source %s failed: %s", source_name, source_result.get("metadata", {}))
             continue
 
         total_sources += 1
+        count = 0
         for item in source_result["results"]:
             url = item.get("url", "")
             title = item.get("title", "")
@@ -63,7 +66,9 @@ async def gather_urls_action(state: NewsletterAgentState) -> str:
             except sqlite3.IntegrityError:
                 pass  # URL already exists
 
+            count += 1
             total_urls += 1
+        source_counts[source_name] = count
 
     # Add to state (handles dedup internally)
     all_headlines = []
@@ -72,9 +77,17 @@ async def gather_urls_action(state: NewsletterAgentState) -> str:
             all_headlines.extend(source_result["results"])
     state.add_headlines(all_headlines)
 
-    logger.info("Completed Step 1: Gathered %d URLs from %d sources (%d failed)",
-                total_urls, total_sources, failed_sources)
-    return f"Gathered {total_urls} URLs from {total_sources} sources ({failed_sources} failed)"
+    # Build per-source summary
+    lines = [f"Gathered {total_urls} URLs from {total_sources} sources ({failed_sources} failed)", ""]
+    for name, count in sorted(source_counts.items(), key=lambda x: (-x[1], x[0])):
+        if count < 0:
+            lines.append(f"  {name}: FAILED")
+        else:
+            lines.append(f"  {name}: {count}")
+
+    summary = "\n".join(lines)
+    logger.info("Completed Step 1:\n%s", summary)
+    return summary
 
 
 def main() -> None:

@@ -64,6 +64,55 @@ class TestNormalizeHtml:
         assert result == ""
 
 
+class TestIsValidHtml:
+    def test_valid_html_with_doctype(self):
+        from lib.scrape import is_valid_html
+        html = "<!DOCTYPE html><html><head></head><body>" + "<p>Content</p>" * 100 + "</body></html>"
+        assert is_valid_html(html) is True
+
+    def test_valid_html_without_doctype(self):
+        from lib.scrape import is_valid_html
+        html = "<html><head></head><body>" + "<p>Content</p>" * 100 + "</body></html>"
+        assert is_valid_html(html) is True
+
+    def test_valid_html_tag_only(self):
+        from lib.scrape import is_valid_html
+        html = "<HTML lang='en'><head></head><body>" + "<p>Content</p>" * 100 + "</body></html>"
+        assert is_valid_html(html) is True
+
+    def test_binary_content_rejected(self):
+        from lib.scrape import is_valid_html
+        # Simulate binary garbage wrapped in HTML tags (>30% non-ASCII)
+        binary_chars = "".join(chr(i) for i in range(128, 256)) * 50
+        content = "<html><head></head><body>" + binary_chars
+        assert is_valid_html(content) is False
+
+    def test_too_short_rejected(self):
+        from lib.scrape import is_valid_html
+        assert is_valid_html("<html><body>short</body></html>") is False
+
+    def test_custom_min_length(self):
+        from lib.scrape import is_valid_html
+        html = "<html><body>short</body></html>"
+        assert is_valid_html(html, min_length=10) is True
+
+    def test_no_html_markers_rejected(self):
+        from lib.scrape import is_valid_html
+        content = "Just some plain text without any HTML markers. " * 50
+        assert is_valid_html(content) is False
+
+    def test_empty_string_rejected(self):
+        from lib.scrape import is_valid_html
+        assert is_valid_html("") is False
+
+    def test_legitimate_utf8_passes(self):
+        from lib.scrape import is_valid_html
+        # Accented characters stay well under the 30% threshold
+        body = "<p>Les données résumées pour l'année en français.</p>" * 20
+        html = "<!DOCTYPE html><html><body>" + body + "</body></html>"
+        assert is_valid_html(html) is True
+
+
 class TestScrapeResult:
     def test_dataclass_fields(self):
         from lib.scrape import ScrapeResult
@@ -124,34 +173,48 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 class TestGetBrowser:
     @pytest.mark.asyncio
-    @patch("lib.scrape.AsyncCamoufox")
-    async def test_returns_browser_context(self, mock_camoufox):
+    @patch("lib.scrape._create_browser_context", new_callable=AsyncMock)
+    @patch("lib.scrape.async_playwright")
+    async def test_returns_browser_context(self, mock_pw, mock_create):
         from lib.scrape import get_browser, _reset_browser_cache
+        import lib.scrape as scrape_mod
         _reset_browser_cache()
-        mock_context = AsyncMock()
-        mock_camoufox.return_value.__aenter__ = AsyncMock(return_value=mock_context)
+        scrape_mod._playwright_instance = None
+        mock_pw_instance = AsyncMock()
+        mock_pw.return_value.start = AsyncMock(return_value=mock_pw_instance)
+        mock_create.return_value = AsyncMock()
         ctx = await get_browser("/tmp/test_profile")
         assert ctx is not None
 
     @pytest.mark.asyncio
-    @patch("lib.scrape.AsyncCamoufox")
-    async def test_caches_browser_context(self, mock_camoufox):
+    @patch("lib.scrape._create_browser_context", new_callable=AsyncMock)
+    @patch("lib.scrape.async_playwright")
+    async def test_caches_browser_context(self, mock_pw, mock_create):
         from lib.scrape import get_browser, _reset_browser_cache
+        import lib.scrape as scrape_mod
         _reset_browser_cache()
-        mock_context = AsyncMock()
-        mock_camoufox.return_value.__aenter__ = AsyncMock(return_value=mock_context)
-        ctx1 = await get_browser("/tmp/test_profile")
-        ctx2 = await get_browser("/tmp/test_profile")
-        # Should only create one browser
-        assert mock_camoufox.call_count == 1
+        scrape_mod._playwright_instance = None
+        mock_pw_instance = AsyncMock()
+        mock_pw.return_value.start = AsyncMock(return_value=mock_pw_instance)
+        mock_create.return_value = AsyncMock()
+        await get_browser("/tmp/test_profile")
+        await get_browser("/tmp/test_profile")
+        # Should only create one browser context
+        assert mock_create.call_count == 1
 
 
 class TestScrapeUrl:
     @pytest.mark.asyncio
-    async def test_saves_html_and_text(self, tmp_path):
+    @patch("lib.scrape.asyncio.sleep", new_callable=AsyncMock)
+    @patch("lib.scrape.enable_fast_mode", new_callable=AsyncMock)
+    async def test_saves_html_and_text(self, mock_fast, mock_sleep, tmp_path):
         from lib.scrape import scrape_url, ScrapeResult
         mock_page = AsyncMock()
-        mock_page.content.return_value = "<html><body><p>AI article content here.</p></body></html>"
+        mock_page.content.return_value = (
+            "<!DOCTYPE html><html><body>"
+            + "<p>AI article content here.</p>" * 50
+            + "</body></html>"
+        )
         mock_page.url = "https://example.com/final-article"
         mock_page.evaluate = AsyncMock(return_value=None)
 
@@ -168,6 +231,7 @@ class TestScrapeUrl:
         assert isinstance(result, ScrapeResult)
         assert result.status in ("success", "no_content")
         assert result.final_url == "https://example.com/final-article"
+        mock_fast.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_handles_navigation_error(self):
@@ -184,6 +248,89 @@ class TestScrapeUrl:
             browser_context=mock_context,
         )
         assert result.status == "error"
+
+    @pytest.mark.asyncio
+    @patch("lib.scrape.asyncio.sleep", new_callable=AsyncMock)
+    @patch("lib.scrape.enable_fast_mode", new_callable=AsyncMock)
+    async def test_returns_corrupt_for_binary_content(self, mock_fast, mock_sleep, tmp_path):
+        from lib.scrape import scrape_url
+        binary_chars = "".join(chr(i) for i in range(128, 256)) * 50
+        corrupt_html = "<html><head></head><body>" + binary_chars
+
+        mock_page = AsyncMock()
+        mock_page.content.return_value = corrupt_html
+        mock_page.url = "https://example.com/corrupt"
+        mock_page.evaluate = AsyncMock(return_value="")
+
+        mock_context = AsyncMock()
+        mock_context.new_page.return_value = mock_page
+
+        result = await scrape_url(
+            url="https://example.com/corrupt",
+            title="Corrupt Page",
+            browser_context=mock_context,
+            html_dir=str(tmp_path / "html"),
+            text_dir=str(tmp_path / "text"),
+        )
+        assert result.status == "corrupt"
+        assert result.html_path == ""
+        assert result.text_path == ""
+
+    @pytest.mark.asyncio
+    @patch("lib.scrape.asyncio.sleep", new_callable=AsyncMock)
+    @patch("lib.scrape.enable_fast_mode", new_callable=AsyncMock)
+    async def test_does_not_write_files_for_corrupt_content(self, mock_fast, mock_sleep, tmp_path):
+        from lib.scrape import scrape_url
+        binary_chars = "".join(chr(i) for i in range(128, 256)) * 50
+        corrupt_html = "<html><head></head><body>" + binary_chars
+
+        mock_page = AsyncMock()
+        mock_page.content.return_value = corrupt_html
+        mock_page.url = "https://example.com/corrupt"
+        mock_page.evaluate = AsyncMock(return_value="")
+
+        mock_context = AsyncMock()
+        mock_context.new_page.return_value = mock_page
+
+        html_dir = tmp_path / "html"
+        text_dir = tmp_path / "text"
+
+        await scrape_url(
+            url="https://example.com/corrupt",
+            title="Corrupt Page",
+            browser_context=mock_context,
+            html_dir=str(html_dir),
+            text_dir=str(text_dir),
+        )
+        # Directories should not be created for corrupt content
+        assert not html_dir.exists()
+        assert not text_dir.exists()
+
+    @pytest.mark.asyncio
+    @patch("lib.scrape.asyncio.sleep", new_callable=AsyncMock)
+    @patch("lib.scrape.enable_fast_mode", new_callable=AsyncMock)
+    async def test_valid_content_still_succeeds(self, mock_fast, mock_sleep, tmp_path):
+        """Regression: good HTML still works after adding is_valid_html check."""
+        from lib.scrape import scrape_url
+        good_html = "<!DOCTYPE html><html><body>" + "<p>Real article content.</p>" * 100 + "</body></html>"
+
+        mock_page = AsyncMock()
+        mock_page.content.return_value = good_html
+        mock_page.url = "https://example.com/good"
+        mock_page.evaluate = AsyncMock(return_value="Good Article")
+
+        mock_context = AsyncMock()
+        mock_context.new_page.return_value = mock_page
+
+        result = await scrape_url(
+            url="https://example.com/good",
+            title="Good Article",
+            browser_context=mock_context,
+            html_dir=str(tmp_path / "html"),
+            text_dir=str(tmp_path / "text"),
+        )
+        assert result.status in ("success", "no_content")
+        assert result.html_path != ""
 
 
 class TestScrapeUrlsConcurrent:

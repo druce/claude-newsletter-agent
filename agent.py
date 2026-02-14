@@ -47,7 +47,7 @@ You execute a 9-step workflow, checking status between steps.
 def build_session_id(session: str | None) -> str:
     if session:
         return session
-    return f"newsletter_{datetime.now():%Y%m%d}"
+    return f"newsletter_{datetime.now():%Y%m%d_%H%M%S}"
 
 
 def build_system_prompt(session_id: str) -> str:
@@ -101,7 +101,7 @@ def register_mcp_server() -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the newsletter agent")
     parser.add_argument("--session", type=str, default=None,
-                        help="Session ID (default: newsletter_YYYYMMDD)")
+                        help="Session ID (default: newsletter_YYYYMMDD_HHMMSS)")
     parser.add_argument("--resume", action="store_true",
                         help="Resume an existing session (requires --session)")
     parser.add_argument("--model", default="sonnet",
