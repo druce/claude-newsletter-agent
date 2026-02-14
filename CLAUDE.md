@@ -6,7 +6,7 @@ Clean rewrite of the newsletter agent (from OpenAIAgentsSDK) using Claude models
 
 **Phase 1: Foundation — COMPLETE** (config, state, db)
 **Phase 2: LLM Layer — COMPLETE** (llm.py with multi-vendor support)
-- Phase 3: Library modules (lib/) — not started
+**Phase 3: Library modules — COMPLETE** (scrape, fetch, dedupe, rating, cluster)
 - Phase 4: Bash-based steps (steps/) — not started
 - Phase 5: MCP tools (tools/) — not started
 - Phase 6: Agent orchestrator — not started
@@ -18,11 +18,17 @@ Hybrid tool pattern: heavy data-processing runs as CLI scripts (steps/), LLM-cen
 ## Key Files
 
 ```
-config.py    — Constants, 126 canonical topics, model IDs, paths, timeouts
-state.py     — StepStatus, WorkflowStep, WorkflowState, NewsletterAgentState (Pydantic v2)
-db.py        — SQLiteModel base class + 5 models: Url, Article, Site, Newsletter, AgentState
-llm.py       — Multi-vendor LLM wrapper (Anthropic, OpenAI, Gemini) with structured output, batch processing, retry logic
-CC.md        — Full migration plan with all phases
+config.py      — Constants, 126 canonical topics, model IDs, paths, timeouts
+state.py       — StepStatus, WorkflowStep, WorkflowState, NewsletterAgentState (Pydantic v2)
+db.py          — SQLiteModel base class + 5 models: Url, Article, Site, Newsletter, AgentState
+llm.py         — Multi-vendor LLM wrapper (Anthropic, OpenAI, Gemini) with structured output, batch processing, retry logic
+prompts.py     — All 23 LLM prompt templates (system/user/model/reasoning_effort)
+lib/scrape.py  — Camoufox browser automation, rate limiting, text extraction
+lib/fetch.py   — Source processor (RSS/HTML/API from sources.yaml)
+lib/dedupe.py  — Embedding-based duplicate detection (cosine similarity)
+lib/rating.py  — Composite rating formula + Bradley-Terry battles
+lib/cluster.py — HDBSCAN + Optuna + UMAP + Claude cluster naming
+CC.md          — Full migration plan with all phases
 ```
 
 ## Running Tests
