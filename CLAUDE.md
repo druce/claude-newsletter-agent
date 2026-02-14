@@ -5,7 +5,7 @@ Clean rewrite of the newsletter agent (from OpenAIAgentsSDK) using Claude models
 ## Project Status
 
 **Phase 1: Foundation — COMPLETE** (config, state, db)
-- Phase 2: LLM Layer — not started
+**Phase 2: LLM Layer — COMPLETE** (llm.py with multi-vendor support)
 - Phase 3: Library modules (lib/) — not started
 - Phase 4: Bash-based steps (steps/) — not started
 - Phase 5: MCP tools (tools/) — not started
@@ -21,6 +21,7 @@ Hybrid tool pattern: heavy data-processing runs as CLI scripts (steps/), LLM-cen
 config.py    — Constants, 126 canonical topics, model IDs, paths, timeouts
 state.py     — StepStatus, WorkflowStep, WorkflowState, NewsletterAgentState (Pydantic v2)
 db.py        — SQLiteModel base class + 5 models: Url, Article, Site, Newsletter, AgentState
+llm.py       — Multi-vendor LLM wrapper (Anthropic, OpenAI, Gemini) with structured output, batch processing, retry logic
 CC.md        — Full migration plan with all phases
 ```
 

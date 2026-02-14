@@ -654,3 +654,45 @@ class TestRunPromptWithProbs:
         probs = asyncio.run(agent.run_prompt_with_probs({"text": "buy now"}, target_tokens=["1"]))
         assert "1" in probs
         assert abs(probs["1"] - 0.85) < 0.01
+
+
+class TestCreateAgent:
+    @patch("llm.anthropic.AsyncAnthropic")
+    def test_creates_anthropic_agent(self, mock_cls):
+        from llm import create_agent, CLAUDE_SONNET_MODEL, AnthropicAgent
+        agent = create_agent(
+            model=CLAUDE_SONNET_MODEL,
+            system_prompt="sys",
+            user_prompt="hello {name}",
+        )
+        assert isinstance(agent, AnthropicAgent)
+
+    @patch("llm.openai.AsyncOpenAI")
+    def test_creates_openai_agent(self, mock_cls):
+        from llm import create_agent, GPT41_MINI_MODEL, OpenAIAgent
+        agent = create_agent(
+            model=GPT41_MINI_MODEL,
+            system_prompt="sys",
+            user_prompt="hello {name}",
+        )
+        assert isinstance(agent, OpenAIAgent)
+
+    @patch("llm.genai.Client")
+    def test_creates_gemini_agent(self, mock_cls):
+        from llm import create_agent, GEMINI_FLASH_MODEL, GeminiAgent
+        agent = create_agent(
+            model=GEMINI_FLASH_MODEL,
+            system_prompt="sys",
+            user_prompt="hello {name}",
+        )
+        assert isinstance(agent, GeminiAgent)
+
+    def test_unknown_vendor_raises(self):
+        from llm import create_agent, LLMModel, Vendor
+        fake_model = LLMModel(
+            model_id="fake", vendor="unknown",
+            supports_logprobs=False, supports_reasoning=False,
+            default_max_tokens=100, display_name="Fake",
+        )
+        with pytest.raises(ValueError, match="Unsupported vendor"):
+            create_agent(model=fake_model, system_prompt="s", user_prompt="u")

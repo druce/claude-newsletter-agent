@@ -459,3 +459,32 @@ class GeminiAgent(LLMAgent):
 
     def _extract_text(self, raw) -> str:
         return raw.text
+
+
+def create_agent(
+    model: LLMModel,
+    system_prompt: str,
+    user_prompt: str,
+    output_type: Optional[Type[BaseModel]] = None,
+    reasoning_effort: int = 0,
+    max_concurrency: int = 12,
+    temperature: float = 0.0,
+) -> LLMAgent:
+    """Factory: create the right agent subclass based on model vendor."""
+    kwargs = dict(
+        model=model,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        output_type=output_type,
+        reasoning_effort=reasoning_effort,
+        max_concurrency=max_concurrency,
+        temperature=temperature,
+    )
+    if model.vendor == Vendor.ANTHROPIC:
+        return AnthropicAgent(**kwargs)
+    elif model.vendor == Vendor.OPENAI:
+        return OpenAIAgent(**kwargs)
+    elif model.vendor == Vendor.GEMINI:
+        return GeminiAgent(**kwargs)
+    else:
+        raise ValueError(f"Unsupported vendor: {model.vendor}")
