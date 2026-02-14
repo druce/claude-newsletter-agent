@@ -75,3 +75,58 @@ class TestCompositeRating:
         )
         expected = 1.5 + 1.0 + 0.8 + 0.7 - 0.1 + 0.5 + 0.0
         assert abs(score - expected) < 0.001
+
+
+class TestAssessQuality:
+    @pytest.mark.asyncio
+    @patch("lib.rating.create_agent")
+    async def test_returns_series(self, mock_create):
+        from lib.rating import assess_quality
+        mock_agent = AsyncMock()
+        mock_agent.run_prompt_with_probs.return_value = {"1": 0.2}
+        mock_create.return_value = mock_agent
+
+        df = pd.DataFrame({
+            "id": [1, 2],
+            "title": ["Good article", "Bad clickbait"],
+            "summary": ["Solid reporting", "You won't believe"],
+        }, index=[0, 1])
+        result = await assess_quality(df)
+        assert isinstance(result, pd.Series)
+        assert len(result) == 2
+
+
+class TestAssessOnTopic:
+    @pytest.mark.asyncio
+    @patch("lib.rating.create_agent")
+    async def test_returns_series(self, mock_create):
+        from lib.rating import assess_on_topic
+        mock_agent = AsyncMock()
+        mock_agent.run_prompt_with_probs.return_value = {"1": 0.9}
+        mock_create.return_value = mock_agent
+
+        df = pd.DataFrame({
+            "id": [1],
+            "title": ["AI Model Release"],
+            "summary": ["OpenAI released new model"],
+        })
+        result = await assess_on_topic(df)
+        assert len(result) == 1
+
+
+class TestAssessImportance:
+    @pytest.mark.asyncio
+    @patch("lib.rating.create_agent")
+    async def test_returns_series(self, mock_create):
+        from lib.rating import assess_importance
+        mock_agent = AsyncMock()
+        mock_agent.run_prompt_with_probs.return_value = {"1": 0.8}
+        mock_create.return_value = mock_agent
+
+        df = pd.DataFrame({
+            "id": [1],
+            "title": ["Major AI Policy"],
+            "summary": ["Government announces AI regulation"],
+        })
+        result = await assess_importance(df)
+        assert len(result) == 1
