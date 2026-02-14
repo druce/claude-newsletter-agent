@@ -604,3 +604,53 @@ class TestFilterDataframe:
         series = asyncio.run(agent.filter_dataframe(df, chunk_size=2))
         assert list(series) == ["x", "y", "z", "w"]
         assert agent.call_count == 2
+
+
+class TestRunPromptWithProbs:
+    def test_native_logprobs_openai(self):
+        from llm import LLMAgent, GPT41_MINI_MODEL
+
+        class StubOpenAI(LLMAgent):
+            _fatal_exceptions = ()
+            _temporary_exceptions = ()
+            async def _call_llm(self, system, user, output_schema):
+                return "mock_response"
+            async def _parse_structured(self, raw, output_type):
+                return None
+            async def _parse_logprobs(self, raw, target_tokens):
+                return {"1": 0.9, "0": 0.1}
+            def _extract_text(self, raw):
+                return raw
+
+        agent = StubOpenAI(
+            model=GPT41_MINI_MODEL,
+            system_prompt="sys",
+            user_prompt="Is this spam? {text}",
+        )
+        probs = asyncio.run(agent.run_prompt_with_probs({"text": "buy now"}, target_tokens=["1"]))
+        assert "1" in probs
+        assert abs(probs["1"] - 0.9) < 0.01
+
+    def test_simulated_confidence_when_no_logprobs(self):
+        from llm import LLMAgent, CLAUDE_SONNET_MODEL
+
+        class StubClaude(LLMAgent):
+            _fatal_exceptions = ()
+            _temporary_exceptions = ()
+            async def _call_llm(self, system, user, output_schema):
+                return '{"confidence": 0.85}'
+            async def _parse_structured(self, raw, output_type):
+                return output_type.model_validate_json(raw)
+            async def _parse_logprobs(self, raw, target_tokens):
+                return {}
+            def _extract_text(self, raw):
+                return raw
+
+        agent = StubClaude(
+            model=CLAUDE_SONNET_MODEL,
+            system_prompt="sys",
+            user_prompt="Is this spam? {text}",
+        )
+        probs = asyncio.run(agent.run_prompt_with_probs({"text": "buy now"}, target_tokens=["1"]))
+        assert "1" in probs
+        assert abs(probs["1"] - 0.85) < 0.01

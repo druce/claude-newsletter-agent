@@ -260,6 +260,32 @@ class LLMAgent(ABC):
         values = [r.get(value_field) for r in flat_results]
         return pd.Series(values, index=df.index)
 
+    async def run_prompt_with_probs(
+        self,
+        variables: Optional[Dict[str, Any]] = None,
+        target_tokens: Optional[List[str]] = None,
+    ) -> Dict[str, float]:
+        """Get token probabilities. Native logprobs for OpenAI, simulated confidence otherwise."""
+        target_tokens = target_tokens or []
+        user_text = self.user_prompt.format(**(variables or {}))
+
+        if self.model.supports_logprobs:
+            raw = await self._call_with_retry(self.system_prompt, user_text, None)
+            return await self._parse_logprobs(raw, target_tokens)
+        else:
+            from pydantic import create_model
+            ConfidenceModel = create_model("ConfidenceModel", confidence=(float, ...))
+            schema = ConfidenceModel.model_json_schema()
+
+            raw = await self._call_with_retry(self.system_prompt, user_text, schema)
+            parsed = await self._parse_structured(raw, ConfidenceModel)
+            confidence = parsed.confidence
+
+            result = {}
+            if target_tokens:
+                result[target_tokens[0]] = confidence
+            return result
+
 
 class AnthropicAgent(LLMAgent):
     """Anthropic Claude agent using tool_use for structured output."""
