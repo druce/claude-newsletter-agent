@@ -116,3 +116,101 @@ class TestRunStep:
         )
         assert result["status"] == "success"
         assert result["message"] == "Async done"
+
+
+class TestGatherUrls:
+    @pytest.fixture(autouse=True)
+    def setup_tables(self):
+        from db import Url, AgentState
+        AgentState.create_table(TEST_DB)
+        Url.create_table(TEST_DB)
+        yield
+
+    @patch("steps.gather_urls.Fetcher")
+    def test_gathers_and_persists_urls(self, mock_fetcher_cls):
+        from steps.gather_urls import gather_urls_action
+        from state import NewsletterAgentState
+        from db import Url
+
+        mock_fetcher = AsyncMock()
+        mock_fetcher.fetch_all.return_value = [
+            {
+                "source": "TestSource",
+                "results": [
+                    {"title": "AI Article One", "url": "https://example.com/1", "source": "TestSource"},
+                    {"title": "AI Article Two", "url": "https://example.com/2", "source": "TestSource"},
+                ],
+                "status": "success",
+                "metadata": {"entry_count": 2},
+            },
+        ]
+        mock_fetcher.__aenter__ = AsyncMock(return_value=mock_fetcher)
+        mock_fetcher.__aexit__ = AsyncMock(return_value=False)
+        mock_fetcher_cls.return_value = mock_fetcher
+
+        state = NewsletterAgentState(session_id="test_session", db_path=TEST_DB)
+        result = asyncio.run(gather_urls_action(state))
+
+        assert "2" in result  # message mentions count
+        assert len(state.headline_data) == 2
+        all_urls = Url.get_all(TEST_DB)
+        assert len(all_urls) == 2
+
+    @patch("steps.gather_urls.Fetcher")
+    def test_deduplicates_across_sources(self, mock_fetcher_cls):
+        from steps.gather_urls import gather_urls_action
+        from state import NewsletterAgentState
+
+        mock_fetcher = AsyncMock()
+        mock_fetcher.fetch_all.return_value = [
+            {
+                "source": "Source1",
+                "results": [{"title": "Shared Article", "url": "https://shared.com/1", "source": "Source1"}],
+                "status": "success",
+                "metadata": {},
+            },
+            {
+                "source": "Source2",
+                "results": [{"title": "Shared Article", "url": "https://shared.com/1", "source": "Source2"}],
+                "status": "success",
+                "metadata": {},
+            },
+        ]
+        mock_fetcher.__aenter__ = AsyncMock(return_value=mock_fetcher)
+        mock_fetcher.__aexit__ = AsyncMock(return_value=False)
+        mock_fetcher_cls.return_value = mock_fetcher
+
+        state = NewsletterAgentState(session_id="test_session", db_path=TEST_DB)
+        result = asyncio.run(gather_urls_action(state))
+
+        # state.add_headlines deduplicates by URL
+        assert len(state.headline_data) == 1
+
+    @patch("steps.gather_urls.Fetcher")
+    def test_skips_failed_sources(self, mock_fetcher_cls):
+        from steps.gather_urls import gather_urls_action
+        from state import NewsletterAgentState
+
+        mock_fetcher = AsyncMock()
+        mock_fetcher.fetch_all.return_value = [
+            {
+                "source": "GoodSource",
+                "results": [{"title": "Good Article Here", "url": "https://good.com/1", "source": "GoodSource"}],
+                "status": "success",
+                "metadata": {},
+            },
+            {
+                "source": "BadSource",
+                "results": [],
+                "status": "error",
+                "metadata": {"error": "Connection failed"},
+            },
+        ]
+        mock_fetcher.__aenter__ = AsyncMock(return_value=mock_fetcher)
+        mock_fetcher.__aexit__ = AsyncMock(return_value=False)
+        mock_fetcher_cls.return_value = mock_fetcher
+
+        state = NewsletterAgentState(session_id="test_session", db_path=TEST_DB)
+        result = asyncio.run(gather_urls_action(state))
+
+        assert len(state.headline_data) == 1
