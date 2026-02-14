@@ -369,11 +369,13 @@ def _extract_last_updated(html_source: str) -> str:
         for attr, val in meta_selectors:
             tag = soup.find("meta", attrs={attr: val})
             if tag and tag.get("content"):
-                return tag["content"]
+                return str(tag["content"])
 
         # JSON-LD datePublished
         for script in soup.find_all("script", type="application/ld+json"):
             try:
+                if not script.string:
+                    continue
                 data = json.loads(script.string)
                 if isinstance(data, dict) and data.get("datePublished"):
                     return data["datePublished"]
@@ -448,12 +450,12 @@ async def scrape_urls_concurrent(
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     # Convert any exceptions to error ScrapeResults
-    final: List[ScrapeResult] = []
-    for i, result in enumerate(results):
-        if isinstance(result, Exception):
-            logger.error("Task %d raised %s: %s", i, type(result).__name__, result)
+    final: list[ScrapeResult] = []
+    for i, r in enumerate(results):
+        if isinstance(r, BaseException):
+            logger.error("Task %d raised %s: %s", i, type(r).__name__, r)
             final.append(ScrapeResult(status="error"))
-        else:
-            final.append(result)
+            continue
+        final.append(r)  # type: ignore[arg-type]  # asyncio.gather narrowing
 
     return final
