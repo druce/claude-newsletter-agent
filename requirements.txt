@@ -18,15 +18,18 @@ choix
 
 # Web scraping
 playwright>=1.43.0
-playwright-stealth
+camoufox
 aiohttp
 aiofiles
 feedparser
 trafilatura
+beautifulsoup4
 
 # Utilities
 tldextract
 pyyaml
+tiktoken
+optuna
 
 # Testing
 pytest

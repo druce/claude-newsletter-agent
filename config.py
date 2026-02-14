@@ -26,6 +26,20 @@ NEWSAGENTDB = "newsletter_agent.db"
 # --- Browser ---
 FIREFOX_PROFILE_PATH = os.environ.get("FIREFOX_PROFILE_PATH", "")
 
+# --- Scraping ---
+DOMAIN_DAILY_CAP = 50
+SLEEP_TIME = 5
+
+# --- Embeddings ---
+EMBEDDING_MODEL = "text-embedding-3-large"
+SIMILARITY_THRESHOLD = 0.925
+MAX_EMBED_TOKENS = 8192
+
+# --- Clustering ---
+MIN_COMPONENTS = 20
+RANDOM_STATE = 42
+OPTUNA_TRIALS = 50
+
 # --- Content Filtering ---
 MIN_TITLE_LEN = 28
 DOMAIN_SKIPLIST = ["finbold.com", "philarchive.org"]
