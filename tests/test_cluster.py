@@ -1,9 +1,7 @@
 # tests/test_cluster.py
 """Tests for lib/cluster.py — HDBSCAN clustering and topic naming."""
 import numpy as np
-import pandas as pd
 import pytest
-from unittest.mock import MagicMock
 
 
 class TestCreateExtendedSummary:
