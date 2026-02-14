@@ -22,7 +22,12 @@ from sklearn.metrics import (
     davies_bouldin_score,
 )
 
+import openai
+from pydantic import BaseModel
+
 from config import EMBEDDING_MODEL, MIN_COMPONENTS, RANDOM_STATE, OPTUNA_TRIALS
+from llm import create_agent
+from prompts import TOPIC_WRITER
 
 # Silence Optuna logs
 optuna.logging.set_verbosity(optuna.logging.WARNING)
@@ -238,3 +243,116 @@ def optimize_hdbscan(
         "score": study.best_value,
         "clusterer": clusterer,
     }
+
+
+# ---------------------------------------------------------------------------
+# Cluster naming (LLM-powered)
+# ---------------------------------------------------------------------------
+
+class TopicText(BaseModel):
+    """LLM response schema for cluster topic naming."""
+    topic: str
+
+
+async def get_embeddings_df(
+    df: pd.DataFrame,
+    model: str = EMBEDDING_MODEL,
+    batch_size: int = 100,
+) -> pd.DataFrame:
+    """Generate embeddings for extended summaries of articles.
+
+    Args:
+        df: DataFrame with article text fields.
+        model: OpenAI embedding model name.
+        batch_size: Number of texts per API call.
+
+    Returns:
+        DataFrame of embedding vectors, indexed like *df*.
+    """
+    client = openai.AsyncOpenAI()
+    texts = [_create_extended_summary(row) for _, row in df.iterrows()]
+    texts = [t if t else "empty" for t in texts]
+
+    all_embeddings = []
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i : i + batch_size]
+        response = await client.embeddings.create(model=model, input=batch)
+        all_embeddings.extend([d.embedding for d in response.data])
+
+    return pd.DataFrame(all_embeddings, index=df.index)
+
+
+async def name_clusters(df: pd.DataFrame) -> pd.DataFrame:
+    """Name each cluster using Claude via the TOPIC_WRITER prompt.
+
+    Clusters with fewer than 2 articles or noise clusters (label < 0) get "Other".
+
+    Args:
+        df: DataFrame with ``cluster_label`` and ``title`` columns.
+
+    Returns:
+        Copy of *df* with a ``cluster_name`` column added.
+    """
+    result = df.copy()
+    result["cluster_name"] = "Other"
+
+    agent = create_agent(
+        model=TOPIC_WRITER.model,
+        system_prompt=TOPIC_WRITER.system_prompt,
+        user_prompt=TOPIC_WRITER.user_prompt,
+        output_type=TopicText,
+        reasoning_effort=TOPIC_WRITER.reasoning_effort,
+    )
+
+    unique_labels = sorted(set(df["cluster_label"]))
+    for label in unique_labels:
+        if label < 0:
+            continue
+        cluster_df = df[df["cluster_label"] == label]
+        if len(cluster_df) < 2:
+            continue
+        titles = cluster_df["title"].tolist()
+        input_text = "\n".join(f"- {t}" for t in titles)
+        try:
+            parsed = await agent.prompt_dict({"input_text": input_text})
+            result.loc[cluster_df.index, "cluster_name"] = parsed.topic
+        except Exception as exc:
+            logger.error("Failed to name cluster %d: %s", label, exc)
+
+    return result
+
+
+async def do_clustering(
+    df: pd.DataFrame,
+    umap_reducer_path: str = "umap_reducer.pkl",
+    n_trials: int = OPTUNA_TRIALS,
+) -> pd.DataFrame:
+    """Top-level clustering pipeline: embed -> reduce -> optimize -> cluster -> name.
+
+    Args:
+        df: DataFrame with text columns (title, summary, description, topics).
+        umap_reducer_path: Path to pretrained UMAP reducer pickle.
+        n_trials: Number of Optuna trials for HDBSCAN optimization.
+
+    Returns:
+        DataFrame with ``cluster_label`` and ``cluster_name`` columns added.
+    """
+    # 1. Get embeddings
+    embeddings_df = await get_embeddings_df(df)
+    embeddings_array = embeddings_df.values
+
+    # 2. Reduce with pretrained UMAP
+    reducer = load_umap_reducer(umap_reducer_path)
+    reduced = reducer.transform(embeddings_array)
+
+    # 3. Optimize HDBSCAN
+    opt_result = optimize_hdbscan(reduced, n_trials=n_trials)
+
+    # 4. Assign labels
+    result = df.copy()
+    result["cluster_label"] = opt_result["labels"]
+
+    # 5. Name clusters
+    result = await name_clusters(result)
+
+    return result
