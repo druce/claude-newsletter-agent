@@ -70,3 +70,73 @@ class TestModelConstants:
         from llm import GEMINI_PRO_MODEL, Vendor
         assert GEMINI_PRO_MODEL.vendor == Vendor.GEMINI
         assert GEMINI_PRO_MODEL.supports_reasoning is True
+
+
+class TestReasoningEffort:
+    def test_anthropic_thinking_tokens(self):
+        from llm import _anthropic_thinking_tokens
+        assert _anthropic_thinking_tokens(0) == 0
+        assert _anthropic_thinking_tokens(2) == 1000
+        assert _anthropic_thinking_tokens(4) == 2000
+        assert _anthropic_thinking_tokens(6) == 4000
+        assert _anthropic_thinking_tokens(8) == 8000
+        assert _anthropic_thinking_tokens(10) == 16000
+
+    def test_openai_reasoning_effort(self):
+        from llm import _openai_reasoning_effort
+        assert _openai_reasoning_effort(0) is None
+        assert _openai_reasoning_effort(2) == "low"
+        assert _openai_reasoning_effort(4) == "low"
+        assert _openai_reasoning_effort(6) == "medium"
+        assert _openai_reasoning_effort(8) == "high"
+        assert _openai_reasoning_effort(10) == "high"
+
+    def test_gemini_thinking_tokens(self):
+        from llm import _gemini_thinking_tokens
+        assert _gemini_thinking_tokens(0) == 0
+        assert _gemini_thinking_tokens(2) == 1024
+        assert _gemini_thinking_tokens(6) == 4096
+        assert _gemini_thinking_tokens(10) == 16384
+
+    def test_invalid_reasoning_effort(self):
+        from llm import _anthropic_thinking_tokens
+        with pytest.raises(ValueError):
+            _anthropic_thinking_tokens(-1)
+        with pytest.raises(ValueError):
+            _anthropic_thinking_tokens(11)
+
+
+class TestLLMAgentInit:
+    def test_cannot_instantiate_abc(self):
+        from llm import LLMAgent, CLAUDE_SONNET_MODEL
+        with pytest.raises(TypeError):
+            LLMAgent(
+                model=CLAUDE_SONNET_MODEL,
+                system_prompt="You are helpful.",
+                user_prompt="Hello {name}",
+            )
+
+    def test_prompt_template_stored(self):
+        """Verify subclass can be instantiated and stores prompts."""
+        from llm import LLMAgent, CLAUDE_SONNET_MODEL, LLMModel, Vendor
+        # Create a minimal concrete subclass for testing
+        class StubAgent(LLMAgent):
+            _fatal_exceptions = ()
+            _temporary_exceptions = ()
+            async def _call_llm(self, system, user, output_schema):
+                return ""
+            async def _parse_structured(self, raw, output_type):
+                return None
+            async def _parse_logprobs(self, raw, target_tokens):
+                return {}
+
+        agent = StubAgent(
+            model=CLAUDE_SONNET_MODEL,
+            system_prompt="sys",
+            user_prompt="Hello {name}",
+        )
+        assert agent.system_prompt == "sys"
+        assert agent.user_prompt == "Hello {name}"
+        assert agent.model == CLAUDE_SONNET_MODEL
+        assert agent.reasoning_effort == 0
+        assert agent.max_concurrency == 12
