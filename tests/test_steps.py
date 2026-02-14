@@ -347,3 +347,62 @@ class TestDownloadArticles:
 
         result = asyncio.run(download_articles_action(state))
         assert "No" in result
+
+
+class TestRateArticles:
+    @pytest.fixture(autouse=True)
+    def setup_tables(self):
+        from db import Article, Site, AgentState
+        AgentState.create_table(TEST_DB)
+        Article.create_table(TEST_DB)
+        Site.create_table(TEST_DB)
+        yield
+
+    @patch("steps.rate_articles.rate_articles_lib")
+    def test_rates_and_updates_articles(self, mock_rate):
+        from steps.rate_articles import rate_articles_action
+        from state import NewsletterAgentState
+        from db import Article
+
+        # Insert test articles
+        for i in range(3):
+            Article(
+                final_url=f"https://example.com/{i}",
+                url=f"https://example.com/{i}",
+                title=f"Article {i}",
+                source="TestSource",
+                content_length=5000,
+                status="success",
+                domain="example.com",
+                site_name="TestSource",
+            ).insert(TEST_DB)
+
+        # Mock the rating pipeline to return a DataFrame with rating columns
+        async def fake_rate(df):
+            df = df.copy()
+            df["low_quality"] = 0.1
+            df["on_topic"] = 0.9
+            df["importance"] = 0.8
+            df["recency"] = 0.5
+            df["length_score"] = 1.0
+            df["bt_zscore"] = 0.0
+            df["rating"] = 4.2
+            return df
+        mock_rate.side_effect = fake_rate
+
+        state = NewsletterAgentState(session_id="test_session", db_path=TEST_DB)
+        result = asyncio.run(rate_articles_action(state))
+
+        assert "3" in result  # rated 3 articles
+        # Verify articles were updated in DB
+        articles = Article.get_all(TEST_DB)
+        for a in articles:
+            assert a.rating == pytest.approx(4.2, abs=0.01)
+
+    def test_handles_no_articles(self):
+        from steps.rate_articles import rate_articles_action
+        from state import NewsletterAgentState
+
+        state = NewsletterAgentState(session_id="test_session", db_path=TEST_DB)
+        result = asyncio.run(rate_articles_action(state))
+        assert "No" in result
