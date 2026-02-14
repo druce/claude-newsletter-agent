@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -197,6 +198,67 @@ class LLMAgent(ABC):
             return await self._call_llm(system, user, output_schema)
 
         return await _do_call()
+
+    async def prompt_list(
+        self,
+        items: List[Dict[str, Any]],
+        item_id_field: str = "id",
+        item_list_field: str = "results_list",
+    ) -> List[Dict[str, Any]]:
+        """Process a list of items through the LLM. Returns list of result dicts."""
+        items_json = json.dumps(items)
+        user_text = self.user_prompt.format(items_json=items_json)
+        output_schema = None
+        if self.output_type:
+            output_schema = self.output_type.model_json_schema()
+
+        raw = await self._call_with_retry(self.system_prompt, user_text, output_schema)
+
+        if self.output_type:
+            parsed = await self._parse_structured(raw, self.output_type)
+            results = getattr(parsed, item_list_field)
+        else:
+            results = json.loads(self._extract_text(raw) if hasattr(self, '_extract_text') else str(raw))
+            results = results[item_list_field]
+
+        # Validate IDs if present
+        sent_ids = [item[item_id_field] for item in items if item_id_field in item]
+        if sent_ids:
+            returned_ids = [r[item_id_field] for r in results if item_id_field in r]
+            if sent_ids != returned_ids:
+                raise ValueError(
+                    f"ID mismatch: sent {sent_ids}, got {returned_ids}"
+                )
+
+        return results
+
+    async def filter_dataframe(
+        self,
+        df: "pd.DataFrame",
+        chunk_size: int = 25,
+        value_field: str = "output",
+        item_list_field: str = "results_list",
+        item_id_field: str = "id",
+    ) -> "pd.Series":
+        """Process DataFrame in chunks, return Series aligned to original index."""
+        import pandas as pd
+
+        chunks = [df.iloc[i:i + chunk_size] for i in range(0, len(df), chunk_size)]
+
+        async def _process_chunk(chunk_df):
+            async with self._semaphore:
+                items = chunk_df.to_dict("records")
+                results = await self.prompt_list(items, item_id_field, item_list_field)
+                return results
+
+        all_results = await asyncio.gather(*[_process_chunk(c) for c in chunks])
+
+        flat_results = []
+        for chunk_results in all_results:
+            flat_results.extend(chunk_results)
+
+        values = [r.get(value_field) for r in flat_results]
+        return pd.Series(values, index=df.index)
 
 
 class AnthropicAgent(LLMAgent):

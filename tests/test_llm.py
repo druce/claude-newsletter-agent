@@ -469,3 +469,138 @@ class TestGeminiAgent:
         config = call_kwargs["config"]
         assert config.thinking_config is not None
         assert config.thinking_config.thinking_budget == 8192
+
+
+import json
+import pandas as pd
+
+
+def _make_batch_stub_agent(responses, output_type=None):
+    from llm import LLMAgent, CLAUDE_SONNET_MODEL
+
+    class BatchStubAgent(LLMAgent):
+        _fatal_exceptions = ()
+        _temporary_exceptions = ()
+
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.call_count = 0
+            self._responses = responses
+            self.captured_user_prompts = []
+
+        async def _call_llm(self, system, user, output_schema):
+            self.call_count += 1
+            self.captured_user_prompts.append(user)
+            idx = min(self.call_count - 1, len(self._responses) - 1)
+            return self._responses[idx]
+
+        async def _parse_structured(self, raw, output_type):
+            return output_type.model_validate_json(raw)
+
+        async def _parse_logprobs(self, raw, target_tokens):
+            return {}
+
+        def _extract_text(self, raw):
+            return str(raw)
+
+    return BatchStubAgent(
+        model=CLAUDE_SONNET_MODEL,
+        system_prompt="Classify items.",
+        user_prompt="Items: {items_json}",
+        output_type=output_type,
+    )
+
+
+class TestPromptList:
+    def test_processes_list_of_items(self):
+        from pydantic import BaseModel
+
+        class ItemResult(BaseModel):
+            id: int
+            output: str
+
+        class ResultList(BaseModel):
+            results_list: list
+
+        items = [{"id": 1, "text": "a"}, {"id": 2, "text": "b"}]
+        response_json = json.dumps({
+            "results_list": [
+                {"id": 1, "output": "yes"},
+                {"id": 2, "output": "no"},
+            ]
+        })
+        agent = _make_batch_stub_agent(
+            responses=[response_json],
+            output_type=ResultList,
+        )
+        results = asyncio.run(agent.prompt_list(items))
+        assert len(results) == 2
+        assert results[0]["id"] == 1
+        assert results[0]["output"] == "yes"
+
+    def test_validates_returned_ids(self):
+        from pydantic import BaseModel
+
+        class ResultList(BaseModel):
+            results_list: list
+
+        items = [{"id": 1, "text": "a"}, {"id": 2, "text": "b"}]
+        response_json = json.dumps({
+            "results_list": [
+                {"id": 1, "output": "yes"},
+                {"id": 99, "output": "no"},
+            ]
+        })
+        agent = _make_batch_stub_agent(
+            responses=[response_json],
+            output_type=ResultList,
+        )
+        with pytest.raises(ValueError, match="ID mismatch"):
+            asyncio.run(agent.prompt_list(items, item_id_field="id"))
+
+
+class TestFilterDataframe:
+    def test_single_chunk(self):
+        from pydantic import BaseModel
+
+        class ResultList(BaseModel):
+            results_list: list
+
+        df = pd.DataFrame({
+            "id": [1, 2, 3],
+            "text": ["a", "b", "c"],
+        })
+        response_json = json.dumps({
+            "results_list": [
+                {"id": 1, "output": "x"},
+                {"id": 2, "output": "y"},
+                {"id": 3, "output": "z"},
+            ]
+        })
+        agent = _make_batch_stub_agent(
+            responses=[response_json],
+            output_type=ResultList,
+        )
+        series = asyncio.run(agent.filter_dataframe(df, chunk_size=25))
+        assert list(series) == ["x", "y", "z"]
+        assert agent.call_count == 1
+
+    def test_multiple_chunks(self):
+        from pydantic import BaseModel
+
+        class ResultList(BaseModel):
+            results_list: list
+
+        df = pd.DataFrame({
+            "id": [1, 2, 3, 4],
+            "text": ["a", "b", "c", "d"],
+        })
+        resp1 = json.dumps({"results_list": [{"id": 1, "output": "x"}, {"id": 2, "output": "y"}]})
+        resp2 = json.dumps({"results_list": [{"id": 3, "output": "z"}, {"id": 4, "output": "w"}]})
+        agent = _make_batch_stub_agent(
+            responses=[resp1, resp2],
+            output_type=ResultList,
+        )
+        series = asyncio.run(agent.filter_dataframe(df, chunk_size=2))
+        assert list(series) == ["x", "y", "z", "w"]
+        assert agent.call_count == 2
