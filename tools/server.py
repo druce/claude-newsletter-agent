@@ -16,6 +16,46 @@ mcp = FastMCP("Newsletter Agent Tools")
 
 
 @mcp.tool
+def check_workflow_status(
+    session_id: str, db_path: str = NEWSAGENTDB
+) -> str:
+    """Check which workflow steps are complete, in progress, or pending.
+
+    Call this first to determine which step to execute next.
+    Returns JSON with each step's status and overall progress.
+    """
+    import sqlite3
+
+    from state import NewsletterAgentState
+
+    try:
+        state = NewsletterAgentState.load_latest_from_db(session_id, db_path=db_path)
+    except sqlite3.OperationalError:
+        state = None
+    if state is None:
+        return json.dumps({
+            "status": "new_session",
+            "message": "No existing state. Start from step 1.",
+            "steps": {}
+        })
+
+    steps = {}
+    for step in state.steps:
+        steps[step.id] = {
+            "status": step.status.value,
+            "message": step.status_message or step.error_message,
+        }
+
+    current = state.get_current_step()
+    return json.dumps({
+        "status": "ok",
+        "progress": f"{state.get_progress_percentage():.0f}%",
+        "next_step": current.id if current else "all_complete",
+        "steps": steps
+    })
+
+
+@mcp.tool
 def extract_summaries(
     session_id: str, db_path: str = NEWSAGENTDB
 ) -> str:
