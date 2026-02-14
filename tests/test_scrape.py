@@ -117,3 +117,89 @@ class TestRateLimiter:
         await limiter.try_acquire("example.com")
         can_proceed, _ = await limiter.try_acquire("example.com")
         assert can_proceed is False
+
+
+from unittest.mock import AsyncMock, MagicMock, patch
+
+
+class TestGetBrowser:
+    @pytest.mark.asyncio
+    @patch("lib.scrape.AsyncCamoufox")
+    async def test_returns_browser_context(self, mock_camoufox):
+        from lib.scrape import get_browser, _reset_browser_cache
+        _reset_browser_cache()
+        mock_context = AsyncMock()
+        mock_camoufox.return_value.__aenter__ = AsyncMock(return_value=mock_context)
+        ctx = await get_browser("/tmp/test_profile")
+        assert ctx is not None
+
+    @pytest.mark.asyncio
+    @patch("lib.scrape.AsyncCamoufox")
+    async def test_caches_browser_context(self, mock_camoufox):
+        from lib.scrape import get_browser, _reset_browser_cache
+        _reset_browser_cache()
+        mock_context = AsyncMock()
+        mock_camoufox.return_value.__aenter__ = AsyncMock(return_value=mock_context)
+        ctx1 = await get_browser("/tmp/test_profile")
+        ctx2 = await get_browser("/tmp/test_profile")
+        # Should only create one browser
+        assert mock_camoufox.call_count == 1
+
+
+class TestScrapeUrl:
+    @pytest.mark.asyncio
+    async def test_saves_html_and_text(self, tmp_path):
+        from lib.scrape import scrape_url, ScrapeResult
+        mock_page = AsyncMock()
+        mock_page.content.return_value = "<html><body><p>AI article content here.</p></body></html>"
+        mock_page.url = "https://example.com/final-article"
+        mock_page.evaluate = AsyncMock(return_value=None)
+
+        mock_context = AsyncMock()
+        mock_context.new_page.return_value = mock_page
+
+        result = await scrape_url(
+            url="https://example.com/article",
+            title="Test Article",
+            browser_context=mock_context,
+            html_dir=str(tmp_path / "html"),
+            text_dir=str(tmp_path / "text"),
+        )
+        assert isinstance(result, ScrapeResult)
+        assert result.status in ("success", "no_content")
+        assert result.final_url == "https://example.com/final-article"
+
+    @pytest.mark.asyncio
+    async def test_handles_navigation_error(self):
+        from lib.scrape import scrape_url, ScrapeResult
+        mock_page = AsyncMock()
+        mock_page.goto.side_effect = Exception("Navigation failed")
+
+        mock_context = AsyncMock()
+        mock_context.new_page.return_value = mock_page
+
+        result = await scrape_url(
+            url="https://example.com/broken",
+            title="Broken",
+            browser_context=mock_context,
+        )
+        assert result.status == "error"
+
+
+class TestScrapeUrlsConcurrent:
+    @pytest.mark.asyncio
+    @patch("lib.scrape.scrape_url")
+    async def test_processes_multiple_urls(self, mock_scrape):
+        from lib.scrape import scrape_urls_concurrent, ScrapeResult
+        mock_scrape.return_value = ScrapeResult(
+            html_path="test.html", text_path="test.txt",
+            final_url="https://example.com", status="success"
+        )
+        urls = [
+            {"url": "https://a.com/1", "title": "A"},
+            {"url": "https://b.com/2", "title": "B"},
+        ]
+        mock_context = AsyncMock()
+        results = await scrape_urls_concurrent(urls, mock_context, concurrency=2)
+        assert len(results) == 2
+        assert all(r.status == "success" for r in results)
