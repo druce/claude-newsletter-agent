@@ -270,7 +270,7 @@ async def get_embeddings_df(
         DataFrame of embedding vectors, indexed like *df*.
     """
     client = openai.AsyncOpenAI()
-    texts = [_create_extended_summary(row) for _, row in df.iterrows()]
+    texts = [_create_extended_summary(row.to_dict()) for _, row in df.iterrows()]
     texts = [t if t else "empty" for t in texts]
 
     all_embeddings = []
