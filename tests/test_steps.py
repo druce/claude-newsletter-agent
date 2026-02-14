@@ -406,3 +406,60 @@ class TestRateArticles:
         state = NewsletterAgentState(session_id="test_session", db_path=TEST_DB)
         result = asyncio.run(rate_articles_action(state))
         assert "No" in result
+
+
+class TestClusterTopics:
+    @pytest.fixture(autouse=True)
+    def setup_tables(self):
+        from db import Article, AgentState
+        AgentState.create_table(TEST_DB)
+        Article.create_table(TEST_DB)
+        yield
+
+    @patch("steps.cluster_topics.do_clustering")
+    def test_clusters_and_updates_articles(self, mock_cluster):
+        from steps.cluster_topics import cluster_topics_action
+        from state import NewsletterAgentState
+        from db import Article
+
+        # Insert test articles
+        for i in range(4):
+            Article(
+                final_url=f"https://example.com/{i}",
+                url=f"https://example.com/{i}",
+                title=f"Article {i}",
+                source="TestSource",
+                content_length=5000,
+                status="success",
+                rating=float(i),
+                domain="example.com",
+                site_name="TestSource",
+            ).insert(TEST_DB)
+
+        # Mock clustering to assign labels and names
+        async def fake_cluster(df, **kwargs):
+            df = df.copy()
+            df["cluster_label"] = [0, 0, 1, 1]
+            df["cluster_name"] = ["AI Policy", "AI Policy", "LLM Updates", "LLM Updates"]
+            return df
+        mock_cluster.side_effect = fake_cluster
+
+        state = NewsletterAgentState(session_id="test_session", db_path=TEST_DB)
+        result = asyncio.run(cluster_topics_action(state))
+
+        assert "4" in result  # clustered 4 articles
+        assert "2" in result  # 2 clusters
+        # Verify state has cluster names
+        assert len(state.cluster_names) == 2
+        assert "AI Policy" in state.cluster_names
+        # Verify clusters dict populated
+        assert "AI Policy" in state.clusters
+        assert len(state.clusters["AI Policy"]) == 2
+
+    def test_handles_no_articles(self):
+        from steps.cluster_topics import cluster_topics_action
+        from state import NewsletterAgentState
+
+        state = NewsletterAgentState(session_id="test_session", db_path=TEST_DB)
+        result = asyncio.run(cluster_topics_action(state))
+        assert "No" in result
