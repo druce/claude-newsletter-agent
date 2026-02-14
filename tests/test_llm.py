@@ -1,5 +1,6 @@
 # tests/test_llm.py
 """Tests for llm.py LLM wrapper."""
+import asyncio
 import pytest
 
 
@@ -142,9 +143,6 @@ class TestLLMAgentInit:
         assert agent.max_concurrency == 12
 
 
-import asyncio
-
-
 def _make_stub_agent(responses=None, output_type=None, side_effect=None):
     """Helper: create a StubAgent that returns canned responses or raises."""
     from llm import LLMAgent, CLAUDE_SONNET_MODEL
@@ -179,7 +177,6 @@ def _make_stub_agent(responses=None, output_type=None, side_effect=None):
         system_prompt="You are helpful.",
         user_prompt="Process: {text}",
         output_type=output_type,
-        **kwargs if 'kwargs' in dir() else {},
     )
 
 
