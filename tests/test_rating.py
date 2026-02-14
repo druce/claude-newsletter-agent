@@ -128,3 +128,81 @@ class TestAssessImportance:
         })
         result = await assess_importance(df)
         assert len(result) == 1
+
+
+class TestSwissPairing:
+    def test_pairs_all_articles(self):
+        from lib.rating import swiss_pairing
+        df = pd.DataFrame({
+            "id": [1, 2, 3, 4],
+            "rating": [5.0, 4.0, 3.0, 2.0],
+        })
+        history = set()
+        pairs = swiss_pairing(df, history)
+        assert len(pairs) >= 1
+        # Each pair should be a tuple of two different IDs
+        for a, b in pairs:
+            assert a != b
+            assert a in df["id"].values
+            assert b in df["id"].values
+
+    def test_avoids_repeat_battles(self):
+        from lib.rating import swiss_pairing
+        df = pd.DataFrame({
+            "id": [1, 2, 3, 4],
+            "rating": [5.0, 4.0, 3.0, 2.0],
+        })
+        history = {(1, 2), (2, 1)}
+        pairs = swiss_pairing(df, history)
+        for a, b in pairs:
+            assert (a, b) not in history
+
+
+class TestRunBradleyTerry:
+    @pytest.mark.asyncio
+    @patch("lib.rating.create_agent")
+    async def test_returns_series(self, mock_create):
+        from lib.rating import run_bradley_terry
+        # Mock battle agent that returns items in ranked order
+        mock_agent = AsyncMock()
+        mock_agent.prompt_list.return_value = [
+            {"id": 1}, {"id": 2}, {"id": 3}
+        ]
+        mock_create.return_value = mock_agent
+
+        df = pd.DataFrame({
+            "id": [1, 2, 3],
+            "title": ["A", "B", "C"],
+            "summary": ["a", "b", "c"],
+            "rating": [0.0, 0.0, 0.0],
+        })
+        result = await run_bradley_terry(df, max_rounds=2, batch_size=3)
+        assert isinstance(result, pd.Series)
+        assert len(result) == 3
+
+
+class TestRateArticles:
+    @pytest.mark.asyncio
+    @patch("lib.rating.run_bradley_terry")
+    @patch("lib.rating.assess_importance")
+    @patch("lib.rating.assess_on_topic")
+    @patch("lib.rating.assess_quality")
+    async def test_end_to_end(self, mock_q, mock_t, mock_i, mock_bt):
+        from lib.rating import rate_articles
+        from datetime import datetime, timedelta
+        mock_q.return_value = pd.Series([0.1, 0.2])
+        mock_t.return_value = pd.Series([0.9, 0.8])
+        mock_i.return_value = pd.Series([0.7, 0.6])
+        mock_bt.return_value = pd.Series([0.0, 0.0])
+
+        df = pd.DataFrame({
+            "id": [1, 2],
+            "title": ["A", "B"],
+            "summary": ["a", "b"],
+            "content_length": [5000, 10000],
+            "published": [datetime.now(), datetime.now() - timedelta(hours=12)],
+            "reputation": [1.0, 1.5],
+        })
+        result = await rate_articles(df)
+        assert "rating" in result.columns
+        assert len(result) == 2
