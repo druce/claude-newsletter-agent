@@ -89,7 +89,7 @@ def register_mcp_server() -> None:
     server_path = os.path.join(PROJECT_DIR, "tools", "server.py")
     subprocess.run(
         ["claude", "mcp", "add", "--transport", "stdio",
-         "--env", f"PYTHONPATH={PROJECT_DIR}",
+         "-e", f"PYTHONPATH={PROJECT_DIR}",
          "newsletter", "--",
          sys.executable, server_path],
         check=True,
