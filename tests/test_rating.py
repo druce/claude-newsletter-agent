@@ -1,11 +1,9 @@
 # tests/test_rating.py
 """Tests for lib/rating.py — article scoring and Bradley-Terry battles."""
-import math
 from datetime import datetime, timedelta
-import numpy as np
 import pandas as pd
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, patch
 
 
 class TestComputeRecencyScore:
