@@ -36,7 +36,7 @@ class PromptConfig:
 FILTER_URLS = PromptConfig(
     name="filter_urls",
     model=CLAUDE_SONNET_MODEL,
-    reasoning_effort=2,
+    reasoning_effort=-1,
     system_prompt="""\
 You are a content-classification assistant that labels news headlines as AI-related or not.
 You will receive a list of JSON objects with fields "id" and "title"

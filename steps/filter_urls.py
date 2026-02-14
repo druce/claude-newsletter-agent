@@ -100,7 +100,7 @@ async def filter_urls_action(state: NewsletterAgentState) -> str:
                     (int(is_ai_val), url_str),
                 )
         except Exception:
-            pass
+            logger.warning("Failed to update isAI for %s", url_str, exc_info=True)
 
     after_filter = len(state.headline_data)
     return (

@@ -77,11 +77,11 @@ class TestReasoningEffort:
     def test_anthropic_thinking_tokens(self):
         from llm import _anthropic_thinking_tokens
         assert _anthropic_thinking_tokens(0) == 0
-        assert _anthropic_thinking_tokens(2) == 1000
-        assert _anthropic_thinking_tokens(4) == 2000
-        assert _anthropic_thinking_tokens(6) == 4000
-        assert _anthropic_thinking_tokens(8) == 8000
-        assert _anthropic_thinking_tokens(10) == 16000
+        assert _anthropic_thinking_tokens(2) == 1024
+        assert _anthropic_thinking_tokens(4) == 2048
+        assert _anthropic_thinking_tokens(6) == 4096
+        assert _anthropic_thinking_tokens(8) == 8192
+        assert _anthropic_thinking_tokens(10) == 16384
 
     def test_openai_reasoning_effort(self):
         from llm import _openai_reasoning_effort
@@ -99,10 +99,16 @@ class TestReasoningEffort:
         assert _gemini_thinking_tokens(6) == 4096
         assert _gemini_thinking_tokens(10) == 16384
 
+    def test_disabled_reasoning_effort(self):
+        from llm import _anthropic_thinking_tokens, _openai_reasoning_effort, _gemini_thinking_tokens
+        assert _anthropic_thinking_tokens(-1) == 0
+        assert _openai_reasoning_effort(-1) is None
+        assert _gemini_thinking_tokens(-1) == 0
+
     def test_invalid_reasoning_effort(self):
         from llm import _anthropic_thinking_tokens
         with pytest.raises(ValueError):
-            _anthropic_thinking_tokens(-1)
+            _anthropic_thinking_tokens(-2)
         with pytest.raises(ValueError):
             _anthropic_thinking_tokens(11)
 
@@ -305,7 +311,7 @@ class TestAnthropicAgent:
         asyncio.run(agent.prompt_dict({"text": "test"}))
         call_kwargs = mock_client.messages.create.call_args[1]
         assert "thinking" in call_kwargs
-        assert call_kwargs["thinking"]["budget_tokens"] == 4000
+        assert call_kwargs["thinking"]["budget_tokens"] == 4096
 
 
 class TestOpenAIAgent:
@@ -506,13 +512,14 @@ def _make_batch_stub_agent(responses, output_type=None):
     return BatchStubAgent(
         model=CLAUDE_SONNET_MODEL,
         system_prompt="Classify items.",
-        user_prompt="Items: {items_json}",
+        user_prompt="Items: {input_text}",
         output_type=output_type,
     )
 
 
 class TestPromptList:
     def test_processes_list_of_items(self):
+        from typing import List
         from pydantic import BaseModel
 
         class ItemResult(BaseModel):
@@ -520,7 +527,7 @@ class TestPromptList:
             output: str
 
         class ResultList(BaseModel):
-            results_list: list
+            results_list: List[ItemResult]
 
         items = [{"id": 1, "text": "a"}, {"id": 2, "text": "b"}]
         response_json = json.dumps({
@@ -539,10 +546,15 @@ class TestPromptList:
         assert results[0]["output"] == "yes"
 
     def test_validates_returned_ids(self):
+        from typing import List
         from pydantic import BaseModel
 
+        class ItemResult(BaseModel):
+            id: int
+            output: str
+
         class ResultList(BaseModel):
-            results_list: list
+            results_list: List[ItemResult]
 
         items = [{"id": 1, "text": "a"}, {"id": 2, "text": "b"}]
         response_json = json.dumps({
@@ -561,10 +573,15 @@ class TestPromptList:
 
 class TestFilterDataframe:
     def test_single_chunk(self):
+        from typing import List
         from pydantic import BaseModel
 
+        class ItemResult(BaseModel):
+            id: int
+            output: str
+
         class ResultList(BaseModel):
-            results_list: list
+            results_list: List[ItemResult]
 
         df = pd.DataFrame({
             "id": [1, 2, 3],
@@ -586,10 +603,15 @@ class TestFilterDataframe:
         assert agent.call_count == 1
 
     def test_multiple_chunks(self):
+        from typing import List
         from pydantic import BaseModel
 
+        class ItemResult(BaseModel):
+            id: int
+            output: str
+
         class ResultList(BaseModel):
-            results_list: list
+            results_list: List[ItemResult]
 
         df = pd.DataFrame({
             "id": [1, 2, 3, 4],

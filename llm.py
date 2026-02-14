@@ -6,22 +6,34 @@ import asyncio
 import json
 import logging
 from abc import ABC, abstractmethod
+
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple, Type
+from pydantic import create_model
+
+import math
+import pandas as pd
 
 import anthropic
-import math
 import openai
 from google import genai
 from google.genai import types as genai_types
 from pydantic import BaseModel
+
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class Vendor(str, Enum):
     """Supported LLM vendors."""
+
     ANTHROPIC = "anthropic"
     OPENAI = "openai"
     GEMINI = "gemini"
@@ -30,6 +42,7 @@ class Vendor(str, Enum):
 @dataclass(frozen=True)
 class LLMModel:
     """Model identity and capabilities."""
+
     model_id: str
     vendor: Vendor
     supports_logprobs: bool
@@ -39,13 +52,25 @@ class LLMModel:
 
 
 # --- Pre-defined model constants ---
+# opus currently supports up to 128k output tokens, others 64k
+# but errors above 16k with, requires streaming if it might take longer than 10 minutes
+# mostly should return id and structured output, shouldn't need long context
+# https://platform.claude.com/docs/en/about-claude/models/overview
+CLAUDE_OPUS_MODEL = LLMModel(
+    model_id="claude-opus-4-6",
+    vendor=Vendor.ANTHROPIC,
+    supports_logprobs=False,
+    supports_reasoning=True,
+    default_max_tokens=16384,
+    display_name="Claude Sonnet 4.5",
+)
 
 CLAUDE_SONNET_MODEL = LLMModel(
     model_id="claude-sonnet-4-5-20250929",
     vendor=Vendor.ANTHROPIC,
     supports_logprobs=False,
     supports_reasoning=True,
-    default_max_tokens=8192,
+    default_max_tokens=16384,
     display_name="Claude Sonnet 4.5",
 )
 
@@ -54,7 +79,7 @@ CLAUDE_HAIKU_MODEL = LLMModel(
     vendor=Vendor.ANTHROPIC,
     supports_logprobs=False,
     supports_reasoning=True,
-    default_max_tokens=8192,
+    default_max_tokens=16384,
     display_name="Claude Haiku 4.5",
 )
 
@@ -94,17 +119,38 @@ GEMINI_PRO_MODEL = LLMModel(
     display_name="Gemini 2.5 Pro",
 )
 
+MODEL_DICT: Dict[str, LLMModel] = {
+    CLAUDE_OPUS_MODEL.model_id: CLAUDE_OPUS_MODEL,
+    CLAUDE_SONNET_MODEL.model_id: CLAUDE_SONNET_MODEL,
+    CLAUDE_HAIKU_MODEL.model_id: CLAUDE_HAIKU_MODEL,
+    GPT5_MINI_MODEL.model_id: GPT5_MINI_MODEL,
+    GPT41_MINI_MODEL.model_id: GPT41_MINI_MODEL,
+    GEMINI_FLASH_MODEL.model_id: GEMINI_FLASH_MODEL,
+    GEMINI_PRO_MODEL.model_id: GEMINI_PRO_MODEL,
+}
 
 # --- Reasoning effort mapping ---
 
-_ANTHROPIC_THINKING_MAP = {0: 0, 2: 1000, 4: 2000, 6: 4000, 8: 8000, 10: 16000}
-_OPENAI_REASONING_MAP = {0: None, 2: "low", 4: "low", 6: "medium", 8: "high", 10: "high"}
-_GEMINI_THINKING_MAP = {0: 0, 2: 1024, 4: 2048, 6: 4096, 8: 8192, 10: 16384}
+_ANTHROPIC_THINKING_MAP = {-1: 0, 0: 0, 2: 1024, 4: 2048, 6: 4096, 8: 8192, 10: 16384}
+_OPENAI_REASONING_MAP = {
+    -1: None,
+    0: None,
+    2: "low",
+    4: "low",
+    6: "medium",
+    8: "high",
+    10: "high",
+}
+_GEMINI_THINKING_MAP = {-1: 0, 0: 0, 2: 1024, 4: 2048, 6: 4096, 8: 8192, 10: 16384}
 
 
 def _validate_effort(effort: int) -> int:
+    if effort == -1:
+        return -1
     if effort < 0 or effort > 10:
-        raise ValueError(f"reasoning_effort must be 0-10, got {effort}")
+        raise ValueError(
+            f"reasoning_effort must be 0-10 (or -1 to disable), got {effort}"
+        )
     # Round to nearest even number
     return round(effort / 2) * 2
 
@@ -122,6 +168,7 @@ def _gemini_thinking_tokens(effort: int) -> int:
 
 
 # --- Abstract base class ---
+
 
 class LLMAgent(ABC):
     """Vendor-agnostic async LLM agent with structured output and retry logic."""
@@ -145,8 +192,10 @@ class LLMAgent(ABC):
         self.output_type = output_type
         self.reasoning_effort = reasoning_effort
         # Validate reasoning effort early
-        if reasoning_effort < 0 or reasoning_effort > 10:
-            raise ValueError(f"reasoning_effort must be 0-10, got {reasoning_effort}")
+        if reasoning_effort < -1 or reasoning_effort > 10:
+            raise ValueError(
+                f"reasoning_effort must be 0-10 (or -1 to disable), got {reasoning_effort}"
+            )
         self.max_concurrency = max_concurrency
         self.temperature = temperature
         self._semaphore = asyncio.Semaphore(max_concurrency)
@@ -159,12 +208,16 @@ class LLMAgent(ABC):
         ...
 
     @abstractmethod
-    async def _parse_structured(self, raw: Any, output_type: Type[BaseModel]) -> BaseModel:
+    async def _parse_structured(
+        self, raw: Any, output_type: Type[BaseModel]
+    ) -> BaseModel:
         """Vendor-specific structured output parsing."""
         ...
 
     @abstractmethod
-    async def _parse_logprobs(self, raw: Any, target_tokens: List[str]) -> Dict[str, float]:
+    async def _parse_logprobs(
+        self, raw: Any, target_tokens: List[str]
+    ) -> Dict[str, float]:
         """Vendor-specific logprob extraction."""
         ...
 
@@ -180,13 +233,14 @@ class LLMAgent(ABC):
         if self.output_type:
             return await self._parse_structured(raw, self.output_type)
         # For text responses, subclass provides _extract_text; fallback to str
-        if hasattr(self, '_extract_text'):
+        if hasattr(self, "_extract_text"):
             return self._extract_text(raw)
         return str(raw)
 
-    async def _call_with_retry(self, system: str, user: str, output_schema: Optional[Dict[str, Any]]) -> Any:
+    async def _call_with_retry(
+        self, system: str, user: str, output_schema: Optional[Dict[str, Any]]
+    ) -> Any:
         """Call LLM with tenacity retry on temporary exceptions."""
-        from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
         @retry(
             retry=retry_if_exception_type(self._temporary_exceptions),
@@ -204,33 +258,60 @@ class LLMAgent(ABC):
         items: List[Dict[str, Any]],
         item_id_field: str = "id",
         item_list_field: str = "results_list",
+        max_retries: int = 3,
     ) -> List[Dict[str, Any]]:
-        """Process a list of items through the LLM. Returns list of result dicts."""
-        items_json = json.dumps(items)
-        user_text = self.user_prompt.format(items_json=items_json)
+        """Process a list of items through the LLM. Returns list of result dicts.
+
+        Retries on ID mismatch (LLM dropped/transposed items) with exponential backoff.
+        """
+        input_text = json.dumps(items)
+        user_text = self.user_prompt.format(input_text=input_text)
         output_schema = None
         if self.output_type:
             output_schema = self.output_type.model_json_schema()
 
-        raw = await self._call_with_retry(self.system_prompt, user_text, output_schema)
-
-        if self.output_type:
-            parsed = await self._parse_structured(raw, self.output_type)
-            results = getattr(parsed, item_list_field)
-        else:
-            results = json.loads(self._extract_text(raw) if hasattr(self, '_extract_text') else str(raw))
-            results = results[item_list_field]
-
-        # Validate IDs if present
         sent_ids = [item[item_id_field] for item in items if item_id_field in item]
-        if sent_ids:
-            returned_ids = [r[item_id_field] for r in results if item_id_field in r]
-            if sent_ids != returned_ids:
-                raise ValueError(
-                    f"ID mismatch: sent {sent_ids}, got {returned_ids}"
-                )
 
-        return results
+        for attempt in range(max_retries):
+            raw = await self._call_with_retry(
+                self.system_prompt, user_text, output_schema
+            )
+
+            if self.output_type:
+                parsed = await self._parse_structured(raw, self.output_type)
+                raw_results = getattr(parsed, item_list_field)
+                # Convert Pydantic models to dicts for uniform downstream access
+                results = [
+                    r.model_dump() if hasattr(r, "model_dump") else r
+                    for r in raw_results
+                ]
+            else:
+                results = json.loads(
+                    self._extract_text(raw)
+                    if hasattr(self, "_extract_text")
+                    else str(raw)
+                )
+                results = results[item_list_field]
+
+            # Validate IDs if present
+            if sent_ids:
+                returned_ids = [r[item_id_field] for r in results if item_id_field in r]
+                if sent_ids != returned_ids:
+                    if attempt < max_retries - 1:
+                        wait = 2 ** (attempt + 1)
+                        logger.warning(
+                            f"ID mismatch (attempt {attempt + 1}/{max_retries}), "
+                            f"retrying in {wait}s: sent {sent_ids}, got {returned_ids}"
+                        )
+                        await asyncio.sleep(wait)
+                        continue
+                    raise ValueError(
+                        f"ID mismatch: sent {sent_ids}, got {returned_ids}"
+                    )
+
+            return results
+
+        return results  # unreachable, but satisfies type checker
 
     async def filter_dataframe(
         self,
@@ -241,9 +322,8 @@ class LLMAgent(ABC):
         item_id_field: str = "id",
     ) -> "pd.Series":
         """Process DataFrame in chunks, return Series aligned to original index."""
-        import pandas as pd
 
-        chunks = [df.iloc[i:i + chunk_size] for i in range(0, len(df), chunk_size)]
+        chunks = [df.iloc[i : i + chunk_size] for i in range(0, len(df), chunk_size)]
 
         async def _process_chunk(chunk_df):
             async with self._semaphore:
@@ -273,7 +353,6 @@ class LLMAgent(ABC):
             raw = await self._call_with_retry(self.system_prompt, user_text, None)
             return await self._parse_logprobs(raw, target_tokens)
         else:
-            from pydantic import create_model
             ConfidenceModel = create_model("ConfidenceModel", confidence=(float, ...))
             schema = ConfidenceModel.model_json_schema()
 
@@ -321,12 +400,17 @@ class AnthropicAgent(LLMAgent):
             kwargs["temperature"] = self.temperature
 
         # Structured output via tool_use
-        if output_schema:
-            kwargs["tools"] = [{
-                "name": "structured_output",
-                "description": "Return structured data",
-                "input_schema": output_schema,
-            }]
+        # Note: Anthropic forbids tool_choice + thinking in the same request.
+        # When thinking is enabled, we skip tool_choice and rely on the system
+        # prompt instructing the model to return valid JSON.
+        if output_schema and thinking_tokens <= 0:
+            kwargs["tools"] = [
+                {
+                    "name": "structured_output",
+                    "description": "Return structured data",
+                    "input_schema": output_schema,
+                }
+            ]
             kwargs["tool_choice"] = {"type": "tool", "name": "structured_output"}
 
         return await self._client.messages.create(**kwargs)
@@ -335,7 +419,10 @@ class AnthropicAgent(LLMAgent):
         for block in raw.content:
             if block.type == "tool_use":
                 return output_type.model_validate(block.input)
-        raise ValueError("No tool_use block in Anthropic response")
+        # Fallback: when thinking is enabled, tool_choice is not used,
+        # so the response is plain text JSON instead of a tool_use block.
+        text = self._extract_text(raw)
+        return output_type.model_validate_json(text)
 
     async def _parse_logprobs(self, raw, target_tokens):
         # Anthropic doesn't support native logprobs; confidence is in structured output
