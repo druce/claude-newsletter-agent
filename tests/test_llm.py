@@ -306,3 +306,98 @@ class TestAnthropicAgent:
         call_kwargs = mock_client.messages.create.call_args[1]
         assert "thinking" in call_kwargs
         assert call_kwargs["thinking"]["budget_tokens"] == 4000
+
+
+class TestOpenAIAgent:
+    def _make_agent(self, output_type=None, reasoning_effort=0):
+        from llm import OpenAIAgent, GPT41_MINI_MODEL
+        return OpenAIAgent(
+            model=GPT41_MINI_MODEL,
+            system_prompt="You are helpful.",
+            user_prompt="Process: {text}",
+            output_type=output_type,
+            reasoning_effort=reasoning_effort,
+        )
+
+    @patch("llm.openai.AsyncOpenAI")
+    def test_instantiation(self, mock_cls):
+        agent = self._make_agent()
+        assert agent.model.vendor.value == "openai"
+
+    @patch("llm.openai.AsyncOpenAI")
+    def test_call_llm_text_response(self, mock_cls):
+        agent = self._make_agent()
+
+        mock_message = MagicMock()
+        mock_message.content = "hello world"
+        mock_choice = MagicMock()
+        mock_choice.message = mock_message
+        mock_choice.logprobs = None
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+
+        mock_client = AsyncMock()
+        mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
+        agent._client = mock_client
+
+        result = asyncio.run(agent.prompt_dict({"text": "test"}))
+        assert result == "hello world"
+
+    @patch("llm.openai.AsyncOpenAI")
+    def test_call_llm_structured_output(self, mock_cls):
+        from pydantic import BaseModel
+
+        class Output(BaseModel):
+            answer: str
+
+        agent = self._make_agent(output_type=Output)
+
+        mock_message = MagicMock()
+        mock_message.content = '{"answer": "42"}'
+        mock_choice = MagicMock()
+        mock_choice.message = mock_message
+        mock_choice.logprobs = None
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+
+        mock_client = AsyncMock()
+        mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
+        agent._client = mock_client
+
+        result = asyncio.run(agent.prompt_dict({"text": "test"}))
+        assert isinstance(result, Output)
+        assert result.answer == "42"
+
+    @patch("llm.openai.AsyncOpenAI")
+    def test_logprobs_extraction(self, mock_cls):
+        agent = self._make_agent()
+
+        # Mock logprobs structure
+        mock_token_logprob = MagicMock()
+        mock_token_logprob.token = "1"
+        mock_token_logprob.logprob = -0.1  # ~0.905
+
+        mock_content_item = MagicMock()
+        mock_content_item.token = "1"
+        mock_content_item.logprob = -0.1
+        mock_content_item.top_logprobs = [mock_token_logprob]
+
+        mock_logprobs = MagicMock()
+        mock_logprobs.content = [mock_content_item]
+
+        mock_message = MagicMock()
+        mock_message.content = "1"
+        mock_choice = MagicMock()
+        mock_choice.message = mock_message
+        mock_choice.logprobs = mock_logprobs
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+
+        mock_client = AsyncMock()
+        mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
+        agent._client = mock_client
+
+        import math
+        probs = asyncio.run(agent._parse_logprobs(mock_response, ["1"]))
+        assert "1" in probs
+        assert abs(probs["1"] - math.exp(-0.1)) < 0.01

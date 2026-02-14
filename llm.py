@@ -10,6 +10,8 @@ from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple, Type
 
 import anthropic
+import math
+import openai
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -255,3 +257,67 @@ class AnthropicAgent(LLMAgent):
             if block.type == "text":
                 return block.text
         return ""
+
+
+class OpenAIAgent(LLMAgent):
+    """OpenAI agent using json_schema for structured output and native logprobs."""
+
+    _fatal_exceptions = (
+        openai.AuthenticationError,
+        openai.BadRequestError,
+    )
+    _temporary_exceptions = (
+        openai.RateLimitError,
+        openai.APIConnectionError,
+        openai.InternalServerError,
+    )
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._client = openai.AsyncOpenAI()
+
+    async def _call_llm(self, system, user, output_schema):
+        kwargs = {
+            "model": self.model.model_id,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "temperature": self.temperature,
+        }
+
+        # Reasoning effort for o-series models
+        effort = _openai_reasoning_effort(self.reasoning_effort)
+        if effort and self.model.supports_reasoning:
+            kwargs["reasoning_effort"] = effort
+
+        # Structured output via json_schema
+        if output_schema:
+            kwargs["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "structured_output",
+                    "strict": True,
+                    "schema": output_schema,
+                },
+            }
+
+        return await self._client.chat.completions.create(**kwargs)
+
+    async def _parse_structured(self, raw, output_type):
+        content = raw.choices[0].message.content
+        return output_type.model_validate_json(content)
+
+    async def _parse_logprobs(self, raw, target_tokens):
+        probs = {}
+        logprobs_data = raw.choices[0].logprobs
+        if not logprobs_data or not logprobs_data.content:
+            return probs
+        for item in logprobs_data.content:
+            for top in item.top_logprobs:
+                if top.token in target_tokens:
+                    probs[top.token] = math.exp(top.logprob)
+        return probs
+
+    def _extract_text(self, raw) -> str:
+        return raw.choices[0].message.content
