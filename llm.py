@@ -161,3 +161,31 @@ class LLMAgent(ABC):
     async def _parse_logprobs(self, raw: Any, target_tokens: List[str]) -> Dict[str, float]:
         """Vendor-specific logprob extraction."""
         ...
+
+    async def prompt_dict(self, variables: Optional[Dict[str, Any]] = None) -> Any:
+        """Single prompt with variable substitution. Returns structured output or raw string."""
+        user_text = self.user_prompt.format(**(variables or {}))
+        output_schema = None
+        if self.output_type:
+            output_schema = self.output_type.model_json_schema()
+
+        raw = await self._call_with_retry(self.system_prompt, user_text, output_schema)
+
+        if self.output_type:
+            return await self._parse_structured(raw, self.output_type)
+        return raw
+
+    async def _call_with_retry(self, system: str, user: str, output_schema: Optional[Dict[str, Any]]) -> Any:
+        """Call LLM with tenacity retry on temporary exceptions."""
+        from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+
+        @retry(
+            retry=retry_if_exception_type(self._temporary_exceptions),
+            stop=stop_after_attempt(3),
+            wait=wait_exponential(multiplier=1, min=2, max=60),
+            reraise=True,
+        )
+        async def _do_call():
+            return await self._call_llm(system, user, output_schema)
+
+        return await _do_call()

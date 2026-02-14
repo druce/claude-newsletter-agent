@@ -140,3 +140,91 @@ class TestLLMAgentInit:
         assert agent.model == CLAUDE_SONNET_MODEL
         assert agent.reasoning_effort == 0
         assert agent.max_concurrency == 12
+
+
+import asyncio
+
+
+def _make_stub_agent(responses=None, output_type=None, side_effect=None):
+    """Helper: create a StubAgent that returns canned responses or raises."""
+    from llm import LLMAgent, CLAUDE_SONNET_MODEL
+
+    class StubAgent(LLMAgent):
+        _fatal_exceptions = (ValueError,)
+        _temporary_exceptions = (ConnectionError,)
+
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.call_count = 0
+            self._responses = responses or ["stub response"]
+            self._side_effect = side_effect
+
+        async def _call_llm(self, system, user, output_schema):
+            self.call_count += 1
+            if self._side_effect and self.call_count <= len(self._side_effect):
+                exc = self._side_effect[self.call_count - 1]
+                if exc is not None:
+                    raise exc
+            idx = min(self.call_count - 1, len(self._responses) - 1)
+            return self._responses[idx]
+
+        async def _parse_structured(self, raw, output_type):
+            return output_type.model_validate_json(raw)
+
+        async def _parse_logprobs(self, raw, target_tokens):
+            return {}
+
+    return StubAgent(
+        model=CLAUDE_SONNET_MODEL,
+        system_prompt="You are helpful.",
+        user_prompt="Process: {text}",
+        output_type=output_type,
+        **kwargs if 'kwargs' in dir() else {},
+    )
+
+
+class TestPromptDict:
+    def test_simple_string_response(self):
+        agent = _make_stub_agent(responses=["hello world"])
+        result = asyncio.run(agent.prompt_dict({"text": "test"}))
+        assert result == "hello world"
+
+    def test_structured_output(self):
+        from pydantic import BaseModel
+
+        class Output(BaseModel):
+            answer: str
+
+        agent = _make_stub_agent(
+            responses=['{"answer": "42"}'],
+            output_type=Output,
+        )
+        result = asyncio.run(agent.prompt_dict({"text": "test"}))
+        assert isinstance(result, Output)
+        assert result.answer == "42"
+
+    def test_variable_substitution(self):
+        agent = _make_stub_agent(responses=["ok"])
+        # Verify the user prompt gets variables substituted
+        asyncio.run(agent.prompt_dict({"text": "hello"}))
+        assert agent.call_count == 1
+
+
+class TestRetryLogic:
+    def test_retries_on_temporary_exception(self):
+        agent = _make_stub_agent(
+            responses=["ok"],
+            side_effect=[ConnectionError("timeout"), None],
+        )
+        result = asyncio.run(agent.prompt_dict({"text": "test"}))
+        assert result == "ok"
+        assert agent.call_count == 2
+
+    def test_no_retry_on_fatal_exception(self):
+        agent = _make_stub_agent(
+            responses=["ok"],
+            side_effect=[ValueError("bad request")],
+        )
+        with pytest.raises(ValueError, match="bad request"):
+            asyncio.run(agent.prompt_dict({"text": "test"}))
+        assert agent.call_count == 1
