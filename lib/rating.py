@@ -124,7 +124,7 @@ def swiss_pairing(
             continue
 
         # Try pairing with the next available opponent
-        for j in range(i + 1, len(sorted_df)):
+        for j in range(int(i) + 1, len(sorted_df)):  # type: ignore[arg-type]
             bid = int(sorted_df.iloc[j]["id"])
             if bid in used:
                 continue
@@ -336,7 +336,7 @@ async def run_bradley_terry(
 
     # Z-score normalize
     bt_values = bt_df["rating"].values
-    if np.std(bt_values) > 0:
+    if np.std(bt_values) > 0:  # type: ignore[arg-type]
         bt_z = zscore(bt_values, ddof=0)
     else:
         bt_z = np.zeros(n)
