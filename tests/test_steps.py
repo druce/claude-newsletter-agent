@@ -255,3 +255,95 @@ class TestFilterUrls:
         # Only AI-relevant article should remain
         assert len(state.headline_data) == 1
         assert "ai" in state.headline_data[0]["url"]
+
+
+class TestDownloadArticles:
+    @pytest.fixture(autouse=True)
+    def setup_tables(self):
+        from db import Article, Site, AgentState
+        AgentState.create_table(TEST_DB)
+        Article.create_table(TEST_DB)
+        Site.create_table(TEST_DB)
+        yield
+
+    @patch("steps.download_articles.get_browser", new_callable=AsyncMock)
+    @patch("steps.download_articles.scrape_urls_concurrent", new_callable=AsyncMock)
+    def test_downloads_and_creates_articles(self, mock_scrape, mock_browser, tmp_path):
+        from steps.download_articles import download_articles_action
+        from state import NewsletterAgentState
+        from db import Article
+        from lib.scrape import ScrapeResult
+
+        mock_browser.return_value = AsyncMock()
+
+        text_file = tmp_path / "test.txt"
+        text_file.write_text("This is test content. " * 50)
+
+        mock_scrape.return_value = [
+            ScrapeResult(
+                html_path=str(tmp_path / "test.html"),
+                text_path=str(text_file),
+                final_url="https://example.com/article-1",
+                last_updated="2026-02-13",
+                status="success",
+            ),
+        ]
+
+        state = NewsletterAgentState(session_id="test_session", db_path=TEST_DB)
+        state.headline_data = [
+            {"url": "https://example.com/article-1", "title": "Test Article", "source": "TestSource"},
+        ]
+
+        result = asyncio.run(download_articles_action(state))
+
+        assert "1" in result  # mentions count
+        articles = Article.get_all(TEST_DB)
+        assert len(articles) == 1
+        assert articles[0].title == "Test Article"
+        assert articles[0].status == "success"
+        assert articles[0].content_length > 0
+
+    @patch("steps.download_articles.get_browser", new_callable=AsyncMock)
+    @patch("steps.download_articles.scrape_urls_concurrent", new_callable=AsyncMock)
+    def test_skips_failed_scrapes(self, mock_scrape, mock_browser, tmp_path):
+        from steps.download_articles import download_articles_action
+        from state import NewsletterAgentState
+        from db import Article
+        from lib.scrape import ScrapeResult
+
+        mock_browser.return_value = AsyncMock()
+
+        text_file = tmp_path / "ok.txt"
+        text_file.write_text("OK content here. " * 50)
+
+        mock_scrape.return_value = [
+            ScrapeResult(status="error"),
+            ScrapeResult(
+                html_path=str(tmp_path / "ok.html"),
+                text_path=str(text_file),
+                final_url="https://example.com/ok",
+                status="success",
+            ),
+        ]
+
+        state = NewsletterAgentState(session_id="test_session", db_path=TEST_DB)
+        state.headline_data = [
+            {"url": "https://bad.com/fail", "title": "Failed", "source": "S1"},
+            {"url": "https://example.com/ok", "title": "OK Article", "source": "S2"},
+        ]
+
+        result = asyncio.run(download_articles_action(state))
+        articles = Article.get_all(TEST_DB)
+        # Only the successful scrape creates an article
+        assert len(articles) == 1
+        assert articles[0].status == "success"
+
+    def test_handles_empty_headlines(self):
+        from steps.download_articles import download_articles_action
+        from state import NewsletterAgentState
+
+        state = NewsletterAgentState(session_id="test_session", db_path=TEST_DB)
+        state.headline_data = []
+
+        result = asyncio.run(download_articles_action(state))
+        assert "No" in result
