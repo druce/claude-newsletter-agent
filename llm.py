@@ -2,8 +2,16 @@
 """Multi-vendor async LLM wrapper with structured output, batch processing, and retry logic."""
 from __future__ import annotations
 
+import asyncio
+import logging
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any, Dict, List, Optional, Tuple, Type
+
+from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 
 class Vendor(str, Enum):
@@ -81,17 +89,6 @@ GEMINI_PRO_MODEL = LLMModel(
 )
 
 
-import asyncio
-import json
-import logging
-from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Tuple, Type
-
-from pydantic import BaseModel
-
-logger = logging.getLogger(__name__)
-
-
 # --- Reasoning effort mapping ---
 
 _ANTHROPIC_THINKING_MAP = {0: 0, 2: 1000, 4: 2000, 6: 4000, 8: 8000, 10: 16000}
@@ -141,6 +138,9 @@ class LLMAgent(ABC):
         self.user_prompt = user_prompt
         self.output_type = output_type
         self.reasoning_effort = reasoning_effort
+        # Validate reasoning effort early
+        if reasoning_effort < 0 or reasoning_effort > 10:
+            raise ValueError(f"reasoning_effort must be 0-10, got {reasoning_effort}")
         self.max_concurrency = max_concurrency
         self.temperature = temperature
         self._semaphore = asyncio.Semaphore(max_concurrency)
