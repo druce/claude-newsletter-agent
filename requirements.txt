@@ -5,6 +5,7 @@ pydantic>=2.0
 # LLM
 anthropic
 openai
+google-genai
 tenacity
 
 # Data processing

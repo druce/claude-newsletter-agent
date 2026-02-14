@@ -12,6 +12,8 @@ from typing import Any, Dict, List, Optional, Tuple, Type
 import anthropic
 import math
 import openai
+from google import genai
+from google.genai import types as genai_types
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -321,3 +323,51 @@ class OpenAIAgent(LLMAgent):
 
     def _extract_text(self, raw) -> str:
         return raw.choices[0].message.content
+
+
+class GeminiAgent(LLMAgent):
+    """Google Gemini agent using response_schema for structured output."""
+
+    _fatal_exceptions = ()
+    _temporary_exceptions = ()
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._client = genai.Client()
+
+    async def _call_llm(self, system, user, output_schema):
+        config_kwargs = {
+            "temperature": self.temperature,
+            "system_instruction": system,
+        }
+
+        thinking_tokens = _gemini_thinking_tokens(self.reasoning_effort)
+        if thinking_tokens > 0:
+            config_kwargs["thinking_config"] = genai_types.ThinkingConfig(
+                thinking_budget=thinking_tokens
+            )
+
+        if output_schema:
+            config_kwargs["response_mime_type"] = "application/json"
+            config_kwargs["response_schema"] = output_schema
+
+        config = genai_types.GenerateContentConfig(**config_kwargs)
+
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None,
+            lambda: self._client.models.generate_content(
+                model=self.model.model_id,
+                contents=user,
+                config=config,
+            ),
+        )
+
+    async def _parse_structured(self, raw, output_type):
+        return output_type.model_validate_json(raw.text)
+
+    async def _parse_logprobs(self, raw, target_tokens):
+        return {}
+
+    def _extract_text(self, raw) -> str:
+        return raw.text

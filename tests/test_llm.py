@@ -401,3 +401,71 @@ class TestOpenAIAgent:
         probs = asyncio.run(agent._parse_logprobs(mock_response, ["1"]))
         assert "1" in probs
         assert abs(probs["1"] - math.exp(-0.1)) < 0.01
+
+
+class TestGeminiAgent:
+    def _make_agent(self, output_type=None, reasoning_effort=0):
+        from llm import GeminiAgent, GEMINI_FLASH_MODEL
+        return GeminiAgent(
+            model=GEMINI_FLASH_MODEL,
+            system_prompt="You are helpful.",
+            user_prompt="Process: {text}",
+            output_type=output_type,
+            reasoning_effort=reasoning_effort,
+        )
+
+    @patch("llm.genai.Client")
+    def test_instantiation(self, mock_cls):
+        agent = self._make_agent()
+        assert agent.model.vendor.value == "gemini"
+
+    @patch("llm.genai.Client")
+    def test_call_llm_text_response(self, mock_cls):
+        agent = self._make_agent()
+
+        mock_response = MagicMock()
+        mock_response.text = "hello world"
+
+        mock_client = MagicMock()
+        mock_client.models.generate_content = MagicMock(return_value=mock_response)
+        agent._client = mock_client
+
+        result = asyncio.run(agent.prompt_dict({"text": "test"}))
+        assert result == "hello world"
+
+    @patch("llm.genai.Client")
+    def test_call_llm_structured_output(self, mock_cls):
+        from pydantic import BaseModel
+
+        class Output(BaseModel):
+            answer: str
+
+        agent = self._make_agent(output_type=Output)
+
+        mock_response = MagicMock()
+        mock_response.text = '{"answer": "42"}'
+
+        mock_client = MagicMock()
+        mock_client.models.generate_content = MagicMock(return_value=mock_response)
+        agent._client = mock_client
+
+        result = asyncio.run(agent.prompt_dict({"text": "test"}))
+        assert isinstance(result, Output)
+        assert result.answer == "42"
+
+    @patch("llm.genai.Client")
+    def test_reasoning_effort_adds_thinking(self, mock_cls):
+        agent = self._make_agent(reasoning_effort=8)
+
+        mock_response = MagicMock()
+        mock_response.text = "result"
+
+        mock_client = MagicMock()
+        mock_client.models.generate_content = MagicMock(return_value=mock_response)
+        agent._client = mock_client
+
+        asyncio.run(agent.prompt_dict({"text": "test"}))
+        call_kwargs = mock_client.models.generate_content.call_args[1]
+        config = call_kwargs["config"]
+        assert config.thinking_config is not None
+        assert config.thinking_config.thinking_budget == 8192
