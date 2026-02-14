@@ -8,7 +8,7 @@ Clean rewrite of the newsletter agent (from OpenAIAgentsSDK) using Claude models
 **Phase 2: LLM Layer — COMPLETE** (llm.py with multi-vendor support)
 **Phase 3: Library modules — COMPLETE** (scrape, fetch, dedupe, rating, cluster)
 **Phase 4: Bash-based steps — COMPLETE** (gather_urls, filter_urls, download_articles, rate_articles, cluster_topics)
-- Phase 5: MCP tools (tools/) — not started
+**Phase 5: MCP tools — COMPLETE** (summarize, select_sections, draft_sections, finalize, FastMCP server)
 - Phase 6: Agent orchestrator — not started
 
 ## Architecture
@@ -29,6 +29,13 @@ lib/dedupe.py  — Embedding-based duplicate detection (cosine similarity)
 lib/rating.py  — Composite rating formula + Bradley-Terry battles
 lib/cluster.py — HDBSCAN + Optuna + UMAP + Claude cluster naming
 steps/         — CLI step scripts (gather_urls, filter_urls, download_articles, rate_articles, cluster_topics)
+tools/server.py      — FastMCP server registering 4 MCP tools
+tools/summarize.py   — Step 4: Extract article summaries via LLM
+tools/select_sections.py — Step 7: Organize articles into newsletter sections
+tools/draft_sections.py  — Step 8: Draft sections with critique-optimize loop
+tools/finalize.py    — Step 9: Assemble, polish, deliver final newsletter
+tools/models.py      — Pydantic output models for structured LLM responses
+tools/email_sender.py — Gmail delivery with HTML conversion
 CC.md          — Full migration plan with all phases
 ```
 
