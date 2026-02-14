@@ -3,17 +3,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import re
-import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from time import monotonic
-from typing import Dict, Optional, Tuple
+from typing import Dict, Tuple
 from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
 
 import trafilatura
-import tldextract
 
 from config import DOMAIN_DAILY_CAP
 

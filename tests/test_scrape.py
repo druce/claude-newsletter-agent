@@ -1,7 +1,5 @@
 # tests/test_scrape.py
 """Tests for lib/scrape.py — utility functions and RateLimiter."""
-import asyncio
-import os
 import pytest
 
 
