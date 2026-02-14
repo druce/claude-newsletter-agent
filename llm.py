@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple, Type
 
+import anthropic
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -192,9 +193,6 @@ class LLMAgent(ABC):
             return await self._call_llm(system, user, output_schema)
 
         return await _do_call()
-
-
-import anthropic
 
 
 class AnthropicAgent(LLMAgent):
