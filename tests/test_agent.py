@@ -1,6 +1,4 @@
 """Tests for agent.py — newsletter agent launcher."""
-import subprocess
-from unittest.mock import patch, MagicMock
 from datetime import datetime
 
 
@@ -80,6 +78,24 @@ class TestBuildCommand:
 
         msg = build_user_message(session_id="s1", resume=False)
         assert "s1" in msg
+
+
+class TestRegisterMCP:
+    def test_register_calls_claude_mcp_add(self):
+        from unittest.mock import patch
+        from agent import register_mcp_server
+
+        with patch("agent.subprocess.run") as mock_run:
+            register_mcp_server()
+            mock_run.assert_called_once()
+            cmd = mock_run.call_args[0][0]
+            assert cmd[0] == "claude"
+            assert "mcp" in cmd
+            assert "add" in cmd
+            assert "newsletter" in cmd
+            assert "--transport" in cmd
+            assert "stdio" in cmd
+            assert cmd[-1].endswith("tools/server.py")
 
 
 class TestResumeValidation:

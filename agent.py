@@ -8,6 +8,8 @@ import subprocess
 import sys
 from datetime import datetime
 
+PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
+
 SYSTEM_PROMPT_TEMPLATE = """\
 You are a newsletter agent that generates a weekly AI news digest.
 You execute a 9-step workflow, checking status between steps.
@@ -84,8 +86,7 @@ def validate_args(resume: bool, session: str | None) -> None:
 
 def register_mcp_server() -> None:
     """Register the newsletter MCP server with Claude Code (idempotent)."""
-    project_dir = os.path.dirname(os.path.abspath(__file__))
-    server_path = os.path.join(project_dir, "tools", "server.py")
+    server_path = os.path.join(PROJECT_DIR, "tools", "server.py")
     subprocess.run(
         ["claude", "mcp", "add", "--transport", "stdio", "newsletter", "--",
          sys.executable, server_path],
@@ -115,8 +116,7 @@ def main() -> None:
     register_mcp_server()
 
     cmd = build_claude_command(user_msg, system_prompt, args.model, args.max_turns)
-    project_dir = os.path.dirname(os.path.abspath(__file__))
-    result = subprocess.run(cmd, cwd=project_dir)
+    result = subprocess.run(cmd, cwd=PROJECT_DIR)
     sys.exit(result.returncode)
 
 
