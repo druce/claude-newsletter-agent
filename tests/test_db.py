@@ -82,6 +82,83 @@ class TestSQLiteModel:
             Url(initial_url="http://same.com", final_url="http://same.com", title="B", source="s").insert(TEST_DB)
 
 
+class TestUrlMetadata:
+    def test_url_with_published_and_summary_roundtrips(self):
+        from db import Url
+        Url.create_table(TEST_DB)
+        u = Url(
+            initial_url="http://example.com/article",
+            final_url="http://example.com/article",
+            title="Test",
+            source="rss",
+            published="Thu, 13 Feb 2026 12:00:00 GMT",
+            summary="A clean summary",
+        )
+        u.insert(TEST_DB)
+        fetched = Url.get(TEST_DB, u.id)
+        assert fetched.published == "Thu, 13 Feb 2026 12:00:00 GMT"
+        assert fetched.summary == "A clean summary"
+
+    def test_url_without_metadata_defaults_to_none(self):
+        from db import Url
+        Url.create_table(TEST_DB)
+        u = Url(initial_url="http://example.com/no-meta", final_url="http://example.com/no-meta", title="T", source="s")
+        u.insert(TEST_DB)
+        fetched = Url.get(TEST_DB, u.id)
+        assert fetched.published is None
+        assert fetched.summary is None
+
+
+class TestMigrateTable:
+    def test_adds_missing_columns(self):
+        """Simulate an old schema missing published/summary, then migrate."""
+        from db import Url, _connect
+        # Create table with old schema (no published/summary)
+        with _connect(TEST_DB) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS urls (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    initial_url TEXT UNIQUE NOT NULL,
+                    final_url TEXT NOT NULL,
+                    title TEXT NOT NULL DEFAULT '',
+                    source TEXT NOT NULL DEFAULT '',
+                    isAI INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT
+                )
+            """)
+        # Insert a row with old schema
+        with _connect(TEST_DB) as conn:
+            conn.execute("INSERT INTO urls (initial_url, final_url, title, source) VALUES (?, ?, ?, ?)",
+                         ("http://old.com", "http://old.com", "Old", "s"))
+
+        # Migrate should add published and summary columns
+        Url.migrate_table(TEST_DB)
+
+        # Now we can insert with new fields
+        u = Url(initial_url="http://new.com", final_url="http://new.com", title="New", source="s",
+                published="2026-02-13", summary="A summary")
+        u.insert(TEST_DB)
+        fetched = Url.get(TEST_DB, u.id)
+        assert fetched.published == "2026-02-13"
+        assert fetched.summary == "A summary"
+
+        # Old row still readable, with None defaults
+        old = Url.get(TEST_DB, 1)
+        assert old.published is None
+        assert old.summary is None
+
+    def test_idempotent(self):
+        from db import Url
+        Url.create_table(TEST_DB)
+        # Calling migrate on a table that already has all columns should be a no-op
+        Url.migrate_table(TEST_DB)
+        Url.migrate_table(TEST_DB)
+        # Should still work fine
+        u = Url(initial_url="http://x.com", final_url="http://x.com", title="X", source="s")
+        u.insert(TEST_DB)
+        assert Url.get(TEST_DB, u.id) is not None
+
+
 class TestArticle:
     def test_create_and_retrieve(self):
         from db import Article

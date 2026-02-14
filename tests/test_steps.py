@@ -187,6 +187,54 @@ class TestGatherUrls:
         assert len(state.headline_data) == 1
 
     @patch("steps.gather_urls.Fetcher")
+    def test_persists_published_and_summary(self, mock_fetcher_cls):
+        from steps.gather_urls import gather_urls_action
+        from state import NewsletterAgentState
+        from db import Url
+
+        mock_fetcher = AsyncMock()
+        mock_fetcher.fetch_all.return_value = [
+            {
+                "source": "RSSSource",
+                "results": [
+                    {
+                        "title": "Article With Meta",
+                        "url": "https://example.com/meta",
+                        "source": "RSSSource",
+                        "published": "Thu, 13 Feb 2026 12:00:00 GMT",
+                        "summary": "Clean summary text",
+                    },
+                    {
+                        "title": "Article Without Meta",
+                        "url": "https://example.com/no-meta",
+                        "source": "RSSSource",
+                    },
+                ],
+                "status": "success",
+                "metadata": {},
+            },
+        ]
+        mock_fetcher.__aenter__ = AsyncMock(return_value=mock_fetcher)
+        mock_fetcher.__aexit__ = AsyncMock(return_value=False)
+        mock_fetcher_cls.return_value = mock_fetcher
+
+        state = NewsletterAgentState(session_id="test_session", db_path=TEST_DB)
+        asyncio.run(gather_urls_action(state))
+
+        all_urls = Url.get_all(TEST_DB)
+        assert len(all_urls) == 2
+
+        # Find the one with metadata
+        by_url = {u.initial_url: u for u in all_urls}
+        meta_url = by_url["https://example.com/meta"]
+        assert meta_url.published == "Thu, 13 Feb 2026 12:00:00 GMT"
+        assert meta_url.summary == "Clean summary text"
+
+        no_meta_url = by_url["https://example.com/no-meta"]
+        assert no_meta_url.published is None
+        assert no_meta_url.summary is None
+
+    @patch("steps.gather_urls.Fetcher")
     def test_skips_failed_sources(self, mock_fetcher_cls):
         from steps.gather_urls import gather_urls_action
         from state import NewsletterAgentState

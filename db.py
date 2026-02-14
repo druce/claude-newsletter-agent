@@ -43,6 +43,16 @@ class SQLiteModel:
             for idx_sql in cls._indexes_sql:
                 conn.execute(idx_sql)
 
+    @classmethod
+    def migrate_table(cls, db_path: str) -> None:
+        """Add any missing columns to an existing table. Idempotent."""
+        expected = {f.name for f in fields(cls)} - {"id"}
+        with _connect(db_path) as conn:
+            rows = conn.execute(f"PRAGMA table_info({cls._table_name})").fetchall()
+            existing = {r["name"] for r in rows}
+            for col in expected - existing:
+                conn.execute(f"ALTER TABLE {cls._table_name} ADD COLUMN {col} TEXT")
+
     def _data_columns(self) -> List[str]:
         """Return field names excluding 'id'."""
         return [f.name for f in fields(self) if f.name != "id"]
@@ -125,6 +135,8 @@ class Url(SQLiteModel):
             title TEXT NOT NULL DEFAULT '',
             source TEXT NOT NULL DEFAULT '',
             isAI INTEGER NOT NULL DEFAULT 0,
+            published TEXT,
+            summary TEXT,
             created_at TEXT
         )
     """
@@ -135,6 +147,8 @@ class Url(SQLiteModel):
     title: str = ""
     source: str = ""
     isAI: bool = False
+    published: Optional[str] = None
+    summary: Optional[str] = None
     created_at: Optional[datetime] = None
 
 

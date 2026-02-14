@@ -23,7 +23,9 @@ logger = logging.getLogger(__name__)
 
 async def gather_urls_action(state: NewsletterAgentState) -> str:
     """Fetch all sources and persist URLs to DB and state."""
+    logger.info("Starting Step 1: Gather URLs")
     Url.create_table(state.db_path)
+    Url.migrate_table(state.db_path)
 
     async with Fetcher(sources_file=state.sources_file) as fetcher:
         results = await fetcher.fetch_all()
@@ -53,6 +55,8 @@ async def gather_urls_action(state: NewsletterAgentState) -> str:
                     final_url=url,
                     title=title,
                     source=item.get("source", source_name),
+                    published=item.get("published"),
+                    summary=item.get("summary"),
                     created_at=datetime.now(),
                 )
                 record.insert(state.db_path)
@@ -68,6 +72,8 @@ async def gather_urls_action(state: NewsletterAgentState) -> str:
             all_headlines.extend(source_result["results"])
     state.add_headlines(all_headlines)
 
+    logger.info("Completed Step 1: Gathered %d URLs from %d sources (%d failed)",
+                total_urls, total_sources, failed_sources)
     return f"Gathered {total_urls} URLs from {total_sources} sources ({failed_sources} failed)"
 
 
