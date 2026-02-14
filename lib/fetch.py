@@ -5,7 +5,7 @@ import asyncio
 import logging
 import os
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from urllib.parse import urljoin, urlparse
 
@@ -54,7 +54,7 @@ def parse_source_links(html_path: str, source_config: dict) -> List[dict]:
 
     # Determine base URL for resolving relative links
     base_tag = soup.find("base")
-    base_url = base_tag["href"] if base_tag and base_tag.get("href") else source_config.get("url", "")
+    base_url = str(base_tag["href"]) if base_tag and base_tag.get("href") else source_config.get("url", "")
 
     include_patterns = source_config.get("include", [])
     exclude_patterns = source_config.get("exclude", [])
@@ -64,7 +64,7 @@ def parse_source_links(html_path: str, source_config: dict) -> List[dict]:
     seen_urls: set = set()
 
     for a_tag in soup.find_all("a", href=True):
-        href = a_tag["href"].strip()
+        href = str(a_tag["href"]).strip()
         text = a_tag.get_text(strip=True)
 
         # Skip empty text or number-only text (pagination links)
@@ -129,9 +129,9 @@ def get_og_tags(html_path: str) -> dict:
     tags: dict = {}
 
     for meta in soup.find_all("meta"):
-        prop = meta.get("property", "")
+        prop = str(meta.get("property", ""))
         if prop.startswith("og:") and meta.get("content"):
-            tags[prop] = meta["content"]
+            tags[prop] = str(meta["content"])
 
     return tags
 
@@ -175,7 +175,7 @@ class Fetcher:
         self._session = aiohttp.ClientSession()
         return self
 
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    async def __aexit__(self, *args: Any) -> None:
         if self._session:
             await self._session.close()
             self._session = None
@@ -192,7 +192,14 @@ class Fetcher:
         """
         source = self.sources[source_key]
         rss_url = source.get("rss", source.get("url", ""))
-        filter_24h = source.get("filter_24h", True)
+
+        if self._session is None:
+            return {
+                "source": source_key,
+                "results": [],
+                "status": "error",
+                "metadata": {"error": "No active session"},
+            }
 
         try:
             resp = await self._session.get(
@@ -209,12 +216,11 @@ class Fetcher:
             content = await resp.text()
 
             feed = feedparser.parse(content)
-            cutoff = datetime.utcnow() - timedelta(hours=24)
 
             entries: List[dict] = []
             for entry in feed.entries:
-                title = entry.get("title", "").strip()
-                link = entry.get("link", "").strip()
+                title = str(getattr(entry, "title", "") or "").strip()
+                link = str(getattr(entry, "link", "") or "").strip()
                 if not title or not link:
                     continue
 
@@ -227,18 +233,21 @@ class Fetcher:
                 }
 
                 # Add optional fields
-                if entry.get("published"):
-                    result_entry["published"] = entry.published
-                if entry.get("summary"):
-                    result_entry["summary"] = entry.summary
+                pub = getattr(entry, "published", None)
+                if pub:
+                    result_entry["published"] = str(pub)
+                summ = getattr(entry, "summary", None)
+                if summ:
+                    result_entry["summary"] = str(summ)
 
                 entries.append(result_entry)
 
+            feed_title = str(getattr(feed.feed, "title", "") or "")
             return {
                 "source": source_key,
                 "results": entries,
                 "status": "success",
-                "metadata": {"feed_title": feed.feed.get("title", ""), "entry_count": len(entries)},
+                "metadata": {"feed_title": feed_title, "entry_count": len(entries)},
             }
 
         except Exception as exc:
@@ -358,7 +367,7 @@ class Fetcher:
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         final: list = []
-        for i, (key, result) in enumerate(zip(self.sources, results)):
+        for key, result in zip(self.sources, results):
             if isinstance(result, BaseException):
                 logger.error("Fetch failed for %s: %s", key, result)
                 final.append({
@@ -391,7 +400,7 @@ class Fetcher:
                 "metadata": {"error": "NEWSAPI_API_KEY not set"},
             }
 
-        yesterday = (datetime.utcnow() - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%S")
+        yesterday = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%S")
         params = {
             "q": "artificial intelligence",
             "from": yesterday,

@@ -1,8 +1,7 @@
 # tests/test_fetch.py
 """Tests for lib/fetch.py — source fetching and link extraction."""
-import asyncio
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 
 class TestParseSourceLinks:
