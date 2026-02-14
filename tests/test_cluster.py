@@ -71,3 +71,41 @@ class TestCalculateClusteringMetrics:
         labels = np.array([-1] * 10)
         metrics = calculate_clustering_metrics(embeddings, labels, clusterer=None)
         assert metrics["silhouette"] == 0.0
+
+
+class TestObjective:
+    def test_returns_float_score(self):
+        from lib.cluster import objective
+        import optuna
+        np.random.seed(42)
+        embeddings = np.vstack([
+            np.random.randn(15, 5) + [3, 0, 0, 0, 0],
+            np.random.randn(15, 5) + [0, 3, 0, 0, 0],
+        ])
+        study = optuna.create_study(direction="maximize")
+        trial = study.ask()
+        score = objective(trial, embeddings)
+        assert isinstance(score, float)
+
+
+class TestOptimizeHdbscan:
+    def test_returns_best_params(self):
+        from lib.cluster import optimize_hdbscan
+        np.random.seed(42)
+        # Create data with 3 clear clusters
+        cluster1 = np.random.randn(20, 10) + np.array([5, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+        cluster2 = np.random.randn(20, 10) + np.array([0, 5, 0, 0, 0, 0, 0, 0, 0, 0])
+        cluster3 = np.random.randn(20, 10) + np.array([0, 0, 5, 0, 0, 0, 0, 0, 0, 0])
+        embeddings = np.vstack([cluster1, cluster2, cluster3])
+
+        result = optimize_hdbscan(embeddings, n_trials=5)
+        assert "min_cluster_size" in result
+        assert "min_samples" in result
+        assert "labels" in result
+        assert "score" in result
+
+    def test_handles_small_dataset(self):
+        from lib.cluster import optimize_hdbscan
+        embeddings = np.random.randn(5, 10)
+        result = optimize_hdbscan(embeddings, n_trials=3)
+        assert "labels" in result

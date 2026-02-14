@@ -14,6 +14,8 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+import hdbscan
+import optuna
 from sklearn.metrics import (
     silhouette_score,
     calinski_harabasz_score,
@@ -21,6 +23,9 @@ from sklearn.metrics import (
 )
 
 from config import EMBEDDING_MODEL, MIN_COMPONENTS, RANDOM_STATE, OPTUNA_TRIALS
+
+# Silence Optuna logs
+optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 logger = logging.getLogger(__name__)
 
@@ -162,4 +167,74 @@ def calculate_clustering_metrics(
         "noise_ratio": noise_ratio,
         "n_clusters": n_clusters,
         "validity_index": validity,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Optuna-based HDBSCAN hyperparameter optimization
+# ---------------------------------------------------------------------------
+
+def objective(trial: optuna.Trial, embeddings_array: np.ndarray) -> float:
+    """Optuna objective: optimize HDBSCAN params for clustering quality.
+
+    Returns composite score: 0.5 * silhouette + 0.5 * validity.
+    """
+    max_cluster_size = max(3, len(embeddings_array) // 3)
+    min_cluster_size = trial.suggest_int("min_cluster_size", 3, min(50, max_cluster_size))
+    min_samples = trial.suggest_int("min_samples", 2, min(30, min_cluster_size))
+
+    clusterer = hdbscan.HDBSCAN(
+        min_cluster_size=min_cluster_size,
+        min_samples=min_samples,
+        metric="euclidean",
+        cluster_selection_method="eom",
+    )
+    labels = clusterer.fit_predict(embeddings_array)
+
+    mask = labels >= 0
+    n_clusters = len(set(labels[mask])) if mask.any() else 0
+    if n_clusters < 2 or mask.sum() < n_clusters + 1:
+        return 0.0
+
+    sil = silhouette_score(embeddings_array[mask], labels[mask])
+    validity = clusterer.relative_validity_ if hasattr(clusterer, "relative_validity_") else 0.0
+    return 0.5 * max(sil, 0.0) + 0.5 * max(validity, 0.0)
+
+
+def optimize_hdbscan(
+    embeddings_array: np.ndarray,
+    n_trials: int = OPTUNA_TRIALS,
+) -> dict:
+    """Run Optuna to find best HDBSCAN hyperparameters.
+
+    Args:
+        embeddings_array: Shape (n_samples, n_features).
+        n_trials: Number of Optuna trials.
+
+    Returns:
+        Dict with keys: min_cluster_size, min_samples, labels, score, clusterer.
+    """
+    if len(embeddings_array) < 6:
+        labels = np.array([-1] * len(embeddings_array))
+        return {"min_cluster_size": 3, "min_samples": 2, "labels": labels, "score": 0.0}
+
+    study = optuna.create_study(direction="maximize")
+    study.optimize(lambda trial: objective(trial, embeddings_array), n_trials=n_trials)
+
+    best = study.best_params
+    # Re-fit with best params to get the clusterer object
+    clusterer = hdbscan.HDBSCAN(
+        min_cluster_size=best["min_cluster_size"],
+        min_samples=best["min_samples"],
+        metric="euclidean",
+        cluster_selection_method="eom",
+    )
+    labels = clusterer.fit_predict(embeddings_array)
+
+    return {
+        "min_cluster_size": best["min_cluster_size"],
+        "min_samples": best["min_samples"],
+        "labels": labels,
+        "score": study.best_value,
+        "clusterer": clusterer,
     }
