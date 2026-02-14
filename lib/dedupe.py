@@ -91,19 +91,17 @@ def create_similarity_matrix(
 
 def find_duplicate_pairs(
     similarity_df: pd.DataFrame, threshold: float = SIMILARITY_THRESHOLD
-) -> List[Tuple[int, int]]:
+) -> list[tuple]:
     """Return ``(i, j)`` pairs whose similarity exceeds *threshold*.
 
     Only the upper triangle is scanned so each pair appears once.
     """
-    pairs: List[Tuple[int, int]] = []
+    pairs: list[tuple] = []
     n = len(similarity_df)
     for i in range(n):
         for j in range(i + 1, n):
             if similarity_df.iloc[i, j] > threshold:
-                pairs.append(
-                    (similarity_df.index[i], similarity_df.columns[j])
-                )
+                pairs.append((similarity_df.index[i], similarity_df.columns[j]))
     return pairs
 
 
@@ -118,13 +116,16 @@ def filter_duplicates(
 
     Uses the ``content_length`` column to decide which to keep.
     """
-    to_drop: set = set()
+    to_drop: list[int] = []
+    dropped: set[int] = set()
     for idx_a, idx_b in pairs:
-        if idx_a in to_drop or idx_b in to_drop:
+        if idx_a in dropped or idx_b in dropped:
             continue
         len_a = df.loc[idx_a, "content_length"] if idx_a in df.index else 0
         len_b = df.loc[idx_b, "content_length"] if idx_b in df.index else 0
-        to_drop.add(idx_a if len_b >= len_a else idx_b)
+        victim = idx_a if len_b >= len_a else idx_b
+        to_drop.append(victim)
+        dropped.add(victim)
     return df.drop(index=to_drop)
 
 
@@ -146,7 +147,11 @@ async def process_dataframe_with_filtering(
     if len(df) < 2:
         return df
 
-    texts = df.get("truncated_text", pd.Series([""] * len(df))).tolist()
+    text_col = df.get("truncated_text")
+    if text_col is not None:
+        texts: list[str] = text_col.tolist()
+    else:
+        texts = [""] * len(df)
     # Replace empty strings so the embedding API doesn't reject them
     texts = [t if t else "empty" for t in texts]
 
