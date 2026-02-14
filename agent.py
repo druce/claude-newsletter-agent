@@ -88,9 +88,10 @@ def register_mcp_server() -> None:
     """Register the newsletter MCP server with Claude Code (idempotent)."""
     server_path = os.path.join(PROJECT_DIR, "tools", "server.py")
     subprocess.run(
-        ["claude", "mcp", "add", "--transport", "stdio",
+        ["claude", "mcp", "add",
+         "newsletter",
          "-e", f"PYTHONPATH={PROJECT_DIR}",
-         "newsletter", "--",
+         "--",
          sys.executable, server_path],
         check=True,
         capture_output=True,

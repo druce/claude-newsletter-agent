@@ -93,8 +93,7 @@ class TestRegisterMCP:
             assert "mcp" in cmd
             assert "add" in cmd
             assert "newsletter" in cmd
-            assert "--transport" in cmd
-            assert "stdio" in cmd
+            assert "-e" in cmd
             assert cmd[-1].endswith("tools/server.py")
 
 
