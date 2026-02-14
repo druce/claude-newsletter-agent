@@ -25,6 +25,12 @@ feedparser
 trafilatura
 beautifulsoup4
 
+# MCP
+fastmcp
+
+# Email
+markdown
+
 # Utilities
 tldextract
 pyyaml
